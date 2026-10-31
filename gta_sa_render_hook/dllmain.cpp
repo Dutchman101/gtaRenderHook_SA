@@ -1,4 +1,4 @@
-﻿#include "game_patches/material_system_patches.h"
+#include "game_patches/material_system_patches.h"
 #include "gta_sa_internal_classes/CColorSet.h"
 #include "idle_hook.h"
 #include <ConfigUtils/ConfigurationManager.h>
@@ -299,9 +299,6 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/, DWORD ul_reason_for_call,
             SetPointer( 0x8DED0C,
                         reinterpret_cast<void *>(
                             D3D8SkinAtomicAllInOneNode ) ); // skin
-
-            // SetPointer( 0x6DF754, reinterpret_cast<void *>( rxD3D8SubmitNode
-            // ) );
 
             // postprocess
             RedirectCall( 0x53E227, reinterpret_cast<void *>( true_ret_hook ) );

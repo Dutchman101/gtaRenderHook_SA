@@ -2,12 +2,12 @@
 
 GTA rendering hook
 
-Implements DirectX11 and Vulkan rendering API to GTA 3, GTA VC and GTA SA.
+Implements DirectX11 and Vulkan rendering API for GTA San Andreas (GTA SA).
 
 
 Currently there are 2 versions, one of which is broken(can't really build it anymore):
 
-* Old one which implemented only DirectX11 and had a few features(only GTA SA)
+* Old one which implemented only DirectX11 and had a few features
 * New one which at the moment runs only on RTX hardware and uses vk_nv_ray_tracing extension(to be replaced with KHR one
   once it is implemented in release drivers)
 
@@ -29,8 +29,7 @@ Long version:
     * It allows to use more memory if needed
     * Surprisingly it works faster!
 * Rendering right now is basic, and very hacky:
-    * BLAS is built for each model instance being loaded by the game. For GTA 3 we load some sectors around the player
-      using original lod system.
+    * BLAS is built for each model instance being loaded by the game.
     * Animations are prepared by compute shaders and rebuilt every frame
     * TLAS is rebuilt every frame
     * Scene is loaded to GPU, contains all materials, textures, vertex/index buffers and transform data
@@ -56,12 +55,10 @@ Long version:
 
 1. Setup libraries via vcpkg(all dependencies are listed in response_file.txt)
 2. Prepare environment:
-    * GTA_3_FOLDER, GTA_VC_FOLDER and GTA_SA_FOLDER should be set to some places where you want resulting executables to
-      be.
+    * GTA_SA_FOLDER should be set to the directory where you want resulting binaries to be placed.
     * When building 32bit binaries use only BUILD_32BIT_LIBS
     * When building 64bit binaries use BUILD_32BIT_LIBS and ARCH_64BIT
     * Loading mod requires [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) installed.
-    * For GTA 3 it'll work only on steam, v1.1 and v1.0 at the moment.
 3. Build x86 and x64 libraries/executables in release or debug configuration using configured CMake.
 4. Run, test and report bugs and incompatibilities!
 

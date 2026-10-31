@@ -301,8 +301,6 @@ struct _rwVKRaster
 };
 #endif
 
-#if ( GTA_SA )
-
 /*
  *	Global Variables
  */
@@ -483,87 +481,6 @@ struct _rwVKRaster
 #define CameraSize( camera, rect, viewWindow, aspectRatio )                    \
     ( (void( __cdecl * )( RwCamera *, void *, float, float ))0x72FC70 )(       \
         camera, rect, viewWindow, aspectRatio )
-
-#elif ( GTA_III )
-/*
- *	Global Variables
- */
-
-#define RwEngineInstance ( (void *)0x661228 )
-#define RpSkinGlobals ( *(rpSkinGlobals *)0x663C8C )
-#define RpResModule ( *(RwModuleInfo *)0x732A18 )
-#define dgGGlobals ( *(RwCamera **)0x6F1D08 )
-
-/*
- *	RenderWare methods
- */
-
-// Standard methods(Rw)
-#define RwD3DSystem( a1, a2, a3, a4 )                                          \
-    ( (bool( __cdecl * )( int, void *, void *, int ))0x5B71E0 )( a1, a2, a3,   \
-                                                                 a4 )
-#define RwD3D9SetTransform( state, matrix )                                    \
-    ( (bool( __cdecl * )( int, RwMatrix * ))0x5BB1D0 )( state, matrix )
-#define rwD3D9SortTriangles( a, b )                                            \
-    ( (int( __cdecl * )( const void *, const void * ))0x5DF5D0 )( a, b )
-
-#define _RwResourcesFreeResEntry( entry )                                      \
-    ( (RwBool( __cdecl * )( RwResEntry * ))0x5C3080 )( entry )
-#define _RwResourcesAllocateResEntry( owner, ownerRef, size, destroyNotify )   \
-    ( (RwResEntry * (__cdecl *)( void *, RwResEntry **, RwInt32,               \
-                                 RwResEntryDestroyNotify ))0x5C3170 )(         \
-        owner, ownerRef, size, destroyNotify )
-
-#define _RwMatrixMultiply( matrixOut, MatrixIn1, MatrixIn2 )                   \
-    ( (RwMatrix *                                                              \
-       (__cdecl *)(RwMatrix *, const RwMatrix *, const RwMatrix *))0x5A28F0 )( \
-        matrixOut, MatrixIn1, MatrixIn2 )
-#define RwMatrixInvert( out, in )                                              \
-    ( (RwMatrix * (__cdecl *)(RwMatrix *, RwMatrix *))0x5A2C90 )( out, in )
-
-#define RwProcessorForceSinglePrecision() ( (void( __cdecl * )())0x5E435E )()
-
-#define RwStreamRead( str, buffer, length )                                    \
-    ( (RwUInt32( __cdecl * )( RwStream *, void *, RwUInt32 ))0x5A3AD0 )(       \
-        str, buffer, length )
-#define RwStreamFindChunk( str, type, lengthOut, versionOut )                  \
-    ( (RwBool( __cdecl * )( RwStream *, RwUInt32, RwUInt32 *,                  \
-                            RwUInt32 * ))0x5AA540 )( str, type, lengthOut,     \
-                                                     versionOut )
-
-#define RwRasterCreate( width, height, depth, flags )                          \
-    ( (RwRaster * (__cdecl *)(int, int, int, int))0x5AD930 )( width, height,   \
-                                                              depth, flags )
-#define RwRasterDestroy( raster )                                              \
-    ( (bool( __cdecl * )( RwRaster * ))0x5AD780 )( raster )
-#define RwRasterLock( raster, level, lockMode )                                \
-    ( (RwUInt8 * (__cdecl *)( RwRaster *, RwUInt8, RwInt32 ))0x5AD9D0 )(       \
-        raster, level, lockMode )
-#define RwRasterUnlock( raster )                                               \
-    ( (RwRaster * (__cdecl *)(RwRaster *))0x5AD6F0 )( raster )
-
-#define RwTextureCreate( raster )                                              \
-    ( (RwTexture * (__cdecl *)(RwRaster *))0x5A72D0 )( raster )
-#define RwTextureSetName( texture, name )                                      \
-    ( (RwTexture * (__cdecl *)(RwTexture *, const RwChar *))0x5A73B0 )(        \
-        texture, name )
-#define RwTextureSetMaskName( texture, maskName )                              \
-    ( (RwTexture * (__cdecl *)(RwTexture *, const RwChar *))0x5A7420 )(        \
-        texture, maskName )
-
-#define RwFrameGetLTM( frame )                                                 \
-    ( (RwMatrix * (__cdecl *)(RwFrame *))0x5A1CE0 )( frame )
-
-#elif ( GTA_VC )
-/*
- *	RenderWare methods
- */
-
-// Standard methods(Rw)
-#define RwD3DSystem( a1, a2, a3, a4 )                                          \
-    ( (bool( __cdecl * )( int, void *, void *, int ))0x65B620 )( a1, a2, a3,   \
-                                                                 a4 )
-#endif
 
 /*
  *	RenderWare macros defines

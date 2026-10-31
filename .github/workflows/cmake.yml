@@ -20,8 +20,6 @@ jobs:
           cmake -E make_directory `
             "$env:GITHUB_WORKSPACE\build\x64" `
             "$env:GITHUB_WORKSPACE\build\x86" `
-            "$env:GITHUB_WORKSPACE\artifacts\gta3" `
-            "$env:GITHUB_WORKSPACE\artifacts\gtavc" `
             "$env:GITHUB_WORKSPACE\artifacts\gtasa"
 
       - name: Setup Vulkan SDK
@@ -96,18 +94,16 @@ jobs:
             -DCMAKE_CXX_FLAGS='/DWIN32 /D_WINDOWS /std:c++latest /W0 /WX- /GR /EHsc /MT' `
             -DARCH_64BIT=ON `
             -DBUILD_32BIT_LIBS=ON `
-            -DGTA_3_FOLDER="$env:GITHUB_WORKSPACE\artifacts\gta3\" `
-            -DGTA_VC_FOLDER="$env:GITHUB_WORKSPACE\artifacts\gtavc\" `
             -DGTA_SA_FOLDER="$env:GITHUB_WORKSPACE\artifacts\gtasa\" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
-      - name: Build x64 render drivers
+      - name: Build x64 render driver
         shell: pwsh
         run: |
           cmake --build "$env:GITHUB_WORKSPACE\build\x64" `
             --config "$env:BUILD_TYPE" `
             --parallel `
-            --target gta_3_render_driver gta_vc_render_driver gta_sa_render_driver `
+            --target gta_sa_render_driver `
             -- /p:TreatWarningsAsErrors=false
 
       - name: Configure CMake x86
@@ -122,33 +118,17 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DCMAKE_CXX_FLAGS='/DWIN32 /D_WINDOWS /std:c++latest /W0 /WX- /GR /EHsc /MT' `
             -DBUILD_32BIT_LIBS=ON `
-            -DGTA_3_FOLDER="$env:GITHUB_WORKSPACE\artifacts\gta3\" `
-            -DGTA_VC_FOLDER="$env:GITHUB_WORKSPACE\artifacts\gtavc\" `
             -DGTA_SA_FOLDER="$env:GITHUB_WORKSPACE\artifacts\gtasa\" `
             -DVCPKG_TARGET_TRIPLET=x86-windows-static
 
-      - name: Build x86 render hooks
+      - name: Build x86 render hook
         shell: pwsh
         run: |
           cmake --build "$env:GITHUB_WORKSPACE\build\x86" `
             --config "$env:BUILD_TYPE" `
             --parallel `
-            --target gta_3_render_hook gta_vc_render_hook gta_sa_render_hook `
+            --target gta_sa_render_hook `
             -- /p:TreatWarningsAsErrors=false
-
-      - name: Artifacts GTA 3
-        uses: actions/upload-artifact@v6
-        with:
-          name: gta3_rh
-          path: ${{ github.workspace }}\artifacts\gta3
-          if-no-files-found: error
-
-      - name: Artifacts GTA VC
-        uses: actions/upload-artifact@v6
-        with:
-          name: gtavc_rh
-          path: ${{ github.workspace }}\artifacts\gtavc
-          if-no-files-found: error
 
       - name: Artifacts GTA SA
         uses: actions/upload-artifact@v6

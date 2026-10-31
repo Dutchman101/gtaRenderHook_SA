@@ -41,88 +41,6 @@
 CDebug*				g_pDebug;
 CIRwRenderEngine*	g_pRwCustomEngine;
 
-// defines
-// TODO: "DELET DIS" - Monika
-#if (GTA_SA)//
-#define RenderSystemPtr 0x8E249C
-#define SetRSPtr 0x8E24A8
-#define GetRSPtr 0x8E24AC
-
-#define Im2DRenderPrimPtr 0x8E24B8
-#define Im2DRenderIndexedPrimPtr 0x8E24BC
-#define Im2DRenderLinePtr 0x8E24B0
-#define Im3DSubmitPtr 0x8E297C
-
-#define AtomicAllInOneNodePtr 0x8D633C
-#define SkinAllInOneNodePtr 0x8DED0C
-#define DefaultInstanceCallbackPtr 0x757899
-
-#define SetRRPtr 0x7F8580
-#define SetVMPtr 0x7F8640
-//#define Im3DOpenPtr 0x53EA0D
-
-#define RwInitPtr 0x5BF3A1
-#define RwShutdownPtr 0x53D910
-
-#define psNativeTextureSupportPtr 0x619D40
-#define Im3DOpenPtr 0x80A225
-
-#define CGammaInitPtr 0x747180
-#define envMapSupportPtr 0x5D8980
-#elif (GTA_III)
-#define RenderSystemPtr 0x61948C
-#define SetRSPtr 0x619498
-#define GetRSPtr 0x61949C
-
-#define Im2DRenderPrimPtr 0x6194A8
-#define Im2DRenderIndexedPrimPtr 0x6194AC
-#define Im2DRenderLinePtr 0x6194A0
-#define Im3DSubmitPtr 0x8E297C
-
-#define AtomicAllInOneNodePtr 0x61B6A4
-#define SkinAllInOneNodePtr 0x61BBAC
-#define DefaultInstanceCallbackPtr 0x5DB429
-
-#define SetRRPtr 0x74631E
-#define SetVMPtr 0x745C75
-#define Im3DOpenPtr 0x53EA0D
-
-#define RwInitPtr 0x5BF3A1
-#define RwShutdownPtr 0x53D910
-
-#define psNativeTextureSupportPtr 0x584C0B
-//#define Im3DOpenPtr 0x80A225
-
-#define CGammaInitPtr 0x748A30
-#define envMapSupportPtr 0x5DA044
-#elif (GTA_VC)
-#define RenderSystemPtr 0x6DDE30
-#define SetRSPtr 0x6DDE3E
-#define GetRSPtr 0x6DDE40
-
-#define Im2DRenderPrimPtr 0x6DDE4C
-#define Im2DRenderIndexedPrimPtr 0x6DDE50
-#define Im2DRenderLinePtr 0x6DDE44
-//#define Im3DSubmitPtr 0x8E297C
-
-//#define AtomicAllInOneNodePtr 0x8D633C
-//#define SkinAllInOneNodePtr 0x8DED0C
-//#define DefaultInstanceCallbackPtr 0x757899
-
-//#define SetRRPtr 0x74631E
-//#define SetVMPtr 0x745C75
-//#define Im3DOpenPtr 0x6431F6
-
-//#define RwInitPtr 0x5BF3A1
-//#define RwShutdownPtr 0x53D910
-
-#define psNativeTextureSupportPtr 0x602E8B
-//#define Im3DOpenPtr 0x80A225
-
-//#define CGammaInitPtr 0x748A30
-//#define envMapSupportPtr 0x5DA044
-#endif 
-
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
                        LPVOID lpReserved
@@ -139,7 +57,6 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         g_pDebug = new CDebug( "debug.log" );
         g_pRwCustomEngine = new CRwD3D1XEngine( g_pDebug );
 
-#if GTA_SA
         // Path rw/game stuff
         CRwGameHooks::Patch( CRwGameHooks::ms_rwPointerTableSA );
         CGTASAHooks::Patch();
@@ -148,7 +65,6 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         CCustomBuildingDNPipeline::Patch();
         CCustomCarFXPipeline::Patch();
         SampHaxx::Patch();
-#endif // GTA_SA
 
         break;
     case DLL_THREAD_ATTACH:

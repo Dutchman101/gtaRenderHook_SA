@@ -1,14 +1,6 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug_III|Win32">
-      <Configuration>Debug_III</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_vc|Win32">
-      <Configuration>Debug_vc</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
       <Platform>Win32</Platform>
@@ -32,13 +24,6 @@
     <CharacterSet>MultiByte</CharacterSet>
     <UseOfMfc>Static</UseOfMfc>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
-    <CharacterSet>MultiByte</CharacterSet>
-    <UseOfMfc>Static</UseOfMfc>
-  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -46,12 +31,6 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
     <UseOfMfc>Static</UseOfMfc>
-  </PropertyGroup>
-  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">
-    <PlatformToolset>v142</PlatformToolset>
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <UseOfMfc>Static</UseOfMfc>
-    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -62,15 +41,8 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
     <Import Project="DependencyPaths.props" />
   </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'" Label="PropertySheets">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="DependencyPaths.props" />
-  </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-    <Import Project="DependencyPaths.props" />
-  </ImportGroup>
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">
     <Import Project="DependencyPaths.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -81,15 +53,6 @@
     <IncludePath>$(ANT_TWEAKBAR)\include;$(PLUGIN_SDK_DIR)\plugin_sa\;$(PLUGIN_SDK_DIR)\shared;$(PLUGIN_SDK_DIR)\shared\game;$(TINY_XML)\..\;$(IncludePath)</IncludePath>
     <LibraryPath>$(TINY_XML)\Debug-Lib;$(ANT_TWEAKBAR)\lib;$(PLUGIN_SDK_DIR)\output\lib;$(LibraryPath)</LibraryPath>
     <OutDir>$(GTA_SA_DIR)</OutDir>
-    <CodeAnalysisRuleSet>gtaRenderHook.ruleset</CodeAnalysisRuleSet>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">
-    <LinkIncremental>true</LinkIncremental>
-    <TargetExt>.asi</TargetExt>
-    <ExecutablePath>$(ExecutablePath)</ExecutablePath>
-    <IncludePath>C:\Users\peter\Documents\GitHub\sa-render\Render\game;$(IncludePath)</IncludePath>
-    <LibraryPath>D:\tinyxml2-master\tinyxml2\Release-Lib;$(LibraryPath)</LibraryPath>
-    <OutDir>$(GTA_VC_DIR)</OutDir>
     <CodeAnalysisRuleSet>gtaRenderHook.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -103,21 +66,12 @@
     <RunCodeAnalysis>false</RunCodeAnalysis>
     <EnableCppCoreCheck>false</EnableCppCoreCheck>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">
-    <OutDir>D:\Program Files (x86)\Rockstar Games\Grand Theft Auto III</OutDir>
-    <TargetExt>.asi</TargetExt>
-    <ExecutablePath>$(ExecutablePath)</ExecutablePath>
-    <IncludePath>$(ANT_TWEAKBAR)\include;$(PLUGIN_SDK_DIR)\shared;$(PLUGIN_SDK_DIR)\plugin_iii\;$(TINY_XML)\..\;$(PLUGIN_SDK_DIR)\plugin_sa\;$(IncludePath)</IncludePath>
-    <LibraryPath>$(TINY_XML)\Debug-Lib;$(ANT_TWEAKBAR)\lib;$(PLUGIN_SDK_DIR)\output\lib;$(LibraryPath)</LibraryPath>
-    <LinkIncremental>true</LinkIncremental>
-    <CodeAnalysisRuleSet>gtaRenderHook.ruleset</CodeAnalysisRuleSet>
-  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;GTARENDERHOOK_EXPORTS;GTA_SA;GTASA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;GTARENDERHOOK_EXPORTS;GTA_SA;GTASA;PLUGIN_SGV_10US;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ForcedIncludeFiles>StdAfx.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <GenerateXMLDocumentationFiles>true</GenerateXMLDocumentationFiles>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -137,21 +91,6 @@
     <Bscmake>
       <PreserveSbr>true</PreserveSbr>
     </Bscmake>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">
-    <ClCompile>
-      <PrecompiledHeader>Use</PrecompiledHeader>
-      <WarningLevel>Level3</WarningLevel>
-      <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;GTARENDERHOOK_EXPORTS;GTA_VC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ForcedIncludeFiles>StdAfx.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <GenerateXMLDocumentationFiles>true</GenerateXMLDocumentationFiles>
-    </ClCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>vulkan-1.lib;user32.lib;dxgi.lib;d3d11.lib;d3dx11.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -176,25 +115,6 @@
     <PostBuildEvent>
       <Command>xcopy "$(ProjectDir)shaders" "$(TargetDir)shaders" /y </Command>
     </PostBuildEvent>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">
-    <ClCompile>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;GTARENDERHOOK_EXPORTS;GTA_III;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <Optimization>Disabled</Optimization>
-      <WarningLevel>Level3</WarningLevel>
-      <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
-      <PrecompiledHeader>Create</PrecompiledHeader>
-      <ForcedIncludeFiles>StdAfx.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <MinimalRebuild>true</MinimalRebuild>
-      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-    </ClCompile>
-    <Link>
-      <AdditionalDependencies>AntTweakBar.lib;user32.lib;dxgi.lib;d3d11.lib;d3dcompiler.lib;tinyxml2.lib;plugin_d.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <SubSystem>Windows</SubSystem>
-      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
-    </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <Text Include="ReadMe.txt" />
@@ -347,10 +267,7 @@
     <ClCompile Include="DeferredRenderer.cpp" />
     <ClCompile Include="dllmain.cpp">
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</CompileAsManaged>
-      <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">false</CompileAsManaged>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-      </PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">
       </PrecompiledHeader>
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</CompileAsManaged>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -372,7 +289,6 @@
     <ClCompile Include="ShadowRenderer.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="TemporalAA.cpp" />
@@ -488,27 +404,21 @@
   <ItemGroup>
     <None Include="shaders\VolumetricLighting.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">Pixel</ShaderType>
       <FileType>Document</FileType>
     </None>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\AmbientOcclusion.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">Pixel</ShaderType>
       <FileType>Document</FileType>
     </None>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\TemporalAA.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">Pixel</ShaderType>
       <FileType>Document</FileType>
     </None>
   </ItemGroup>
@@ -516,19 +426,13 @@
     <None Include="shaders\CloudRendering.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</DeploymentContent>
-      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">true</DeploymentContent>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</DeploymentContent>
-      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">true</DeploymentContent>
     </None>
     <FxCompile Include="shaders\RayTracing.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug_III|Win32'">4.0</ShaderModel>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">4.0</ShaderModel>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug_vc|Win32'">4.0</ShaderModel>
     </FxCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

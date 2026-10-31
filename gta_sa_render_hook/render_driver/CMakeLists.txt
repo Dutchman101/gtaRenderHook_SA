@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 
 project(gta_sa_render_driver)
+set(GTA_SA_FOLDER "" CACHE PATH "GTA SA folder")
 
 set(SOURCES
         main.cpp
@@ -12,20 +13,25 @@ add_executable(${PROJECT_NAME} WIN32 ${SOURCES})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
         CXX_STANDARD 20
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG ${GTA_SA_FOLDER}/
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE ${GTA_SA_FOLDER}/
-        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${GTA_SA_FOLDER}/
         )
+if (NOT "${GTA_SA_FOLDER}" STREQUAL "")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY_DEBUG "${GTA_SA_FOLDER}/"
+            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${GTA_SA_FOLDER}/"
+            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${GTA_SA_FOLDER}/"
+            )
+endif ()
 target_compile_definitions(${PROJECT_NAME} PRIVATE -DUSE_VULKAN_API)
 
 target_link_libraries(${PROJECT_NAME} $ENV{VULKAN_SDK}/Lib/vulkan-1.lib rh_engine_lib rw_rh_engine_lib)
-target_compile_options(${PROJECT_NAME} PRIVATE)
 
 include("${CMAKE_SOURCE_DIR}/cmake/resource_install.cmake")
 
-# This process compiles shaders at runtime, so it installs the shader tree and
-# the validator next to itself instead of relying on the 32-bit hook build.
+# This process compiles shaders and loads engine resources at runtime, so it
+# installs the shader tree, runtime resources, and validator next to itself
+# instead of relying on the 32-bit hook build.
 copy_resources_to_build_dir(${PROJECT_NAME} "${CMAKE_SOURCE_DIR}/shaders" "shaders")
+copy_resources_to_build_dir(${PROJECT_NAME} "${CMAKE_SOURCE_DIR}/rw_rh_engine_lib/resources" "resources")
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy

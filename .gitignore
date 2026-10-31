@@ -243,7 +243,6 @@ ModelManifest.xml
 
 # FAKE - F# Make
 .fake/
-/gtaRenderHook/Debug_III
 /html
 /latex
 /rtf

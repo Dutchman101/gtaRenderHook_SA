@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.12)
 
 project(gta_sa_render_hook)
-set(GTA_SA_FOLDER CACHE PATH "GTA SA folder")
+set(GTA_SA_FOLDER "" CACHE PATH "GTA SA folder")
+
+include("${CMAKE_SOURCE_DIR}/rw_rh_engine_lib/install_rw_library.cmake")
 
 set(SOURCES
         dllmain.cpp
@@ -26,21 +28,28 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 
-set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".asi")
 set_target_properties(${PROJECT_NAME} PROPERTIES
         CXX_STANDARD 20
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG ${GTA_SA_FOLDER}/
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE ${GTA_SA_FOLDER}/
-        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${GTA_SA_FOLDER}/
+        SUFFIX ".asi"
         )
+if (NOT "${GTA_SA_FOLDER}" STREQUAL "")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY_DEBUG "${GTA_SA_FOLDER}/"
+            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${GTA_SA_FOLDER}/"
+            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${GTA_SA_FOLDER}/"
+            )
+endif ()
 
 #set_property(TARGET ${PROJECT_NAME} PROPERTY
 #        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-target_link_libraries(${PROJECT_NAME} rh_engine_lib)
+if (USE_VULKAN_API)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -DUSE_VULKAN_API)
+endif ()
 
+target_link_libraries(${PROJECT_NAME} rh_engine_lib)
 
 install_rw_library()
 
 # Copy shaders to build destination
-copy_resources_to_build_dir(${PROJECT_NAME} "${CMAKE_SOURCE_DIR}\\shaders" "shaders" )
+copy_resources_to_build_dir(${PROJECT_NAME} "${CMAKE_SOURCE_DIR}/shaders" "shaders")

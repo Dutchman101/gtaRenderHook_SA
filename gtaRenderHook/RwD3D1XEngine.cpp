@@ -786,15 +786,8 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
     RwProcessorForceSinglePrecision();
     dgGGlobals = camera;
     // View and projection transform computing
-    RwGraphicsMatrix viewTransform = {};
-    RwGraphicsMatrix projTransform = {};
-#if (GTA_SA)
     RwGraphicsMatrix *viewTransformRef = (RwGraphicsMatrix*)&RwD3D9D3D9ViewTransform;
     RwGraphicsMatrix *projTransformRef = (RwGraphicsMatrix*)&RwD3D9D3D9ProjTransform;
-#else
-    RwGraphicsMatrix *viewTransformRef = (RwGraphicsMatrix*)&viewTransform;
-    RwGraphicsMatrix *projTransformRef = (RwGraphicsMatrix*)&projTransform;
-#endif
     RwMatrix* camMatrix = RwFrameGetLTM( static_cast<RwFrame*>( camera->object.object.parent ) );
     // rw used inverse of camera frame matrix with negative column-vector
     RwMatrixInvert( (RwMatrix*)viewTransformRef, camMatrix );
@@ -834,9 +827,7 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
     }
     projTransformRef->m[3].z = -( projTransformRef->m[2].z * camera->nearPlane );
     // compute view-projection transform
-#if (GTA_SA)
     RwD3D9ActiveViewProjTransform = nullptr;
-#endif
     g_pRenderBuffersMgr->UpdateViewProjMatricles( *(RwMatrix*)viewTransformRef, *(RwMatrix*)projTransformRef );
 
     // resize main framebuffer if adapter mode changed
