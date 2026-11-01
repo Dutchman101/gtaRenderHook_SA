@@ -7,9 +7,8 @@ Implements DirectX11 and Vulkan rendering API for GTA San Andreas (GTA SA).
 
 Currently there are 2 versions, one of which is broken(can't really build it anymore):
 
-* Old one which implemented only DirectX11 and had a few features
-* New one which at the moment runs only on RTX hardware and uses vk_nv_ray_tracing extension(to be replaced with KHR one
-  once it is implemented in release drivers)
+* Legacy in-process DirectX 11 plugin (`gtaRenderHook/gtaRenderHook.vcxproj`, unmaintained).
+* Active out-of-process Vulkan 1.2 + hardware ray tracing stack (`VK_KHR_acceleration_structure` / `VK_KHR_ray_tracing_pipeline`, supporting Vulkan 1.2 ray-tracing GPUs) with ReSTIR direct lighting and shadows, ray-traced primary G-buffer, ambient occlusion, and reflections.
 
 We have [discord server](https://discord.gg/rsZEUNW), come and help to improve it!
 
@@ -46,21 +45,50 @@ Long version:
 
 ## Current requirements to build development source code
 
-1) VCPkg
-2) Cmake
-3) Visual Studio/CLion
-4) C++ compiler with c++20
+1) `vcpkg` (`@response_file.txt` installed for both `x64-windows-static` and `x86-windows-static`)
+2) CMake 3.15+ (plus Ninja for single-config CTest builds)
+3) LunarG Vulkan SDK (`VULKAN_SDK` set, providing `Bin/glslangValidator.exe`)
+4) Visual Studio C++ toolchain with C++20 support
+5) GTA San Andreas `v1.0 US` + [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) (`winmm.dll`, Win32)
 
-## Build instructions
+## Build & Test Workflow
 
-1. Setup libraries via vcpkg(all dependencies are listed in response_file.txt)
-2. Prepare environment:
-    * GTA_SA_FOLDER should be set to the directory where you want resulting binaries to be placed.
-    * When building 32bit binaries use only BUILD_32BIT_LIBS
-    * When building 64bit binaries use BUILD_32BIT_LIBS and ARCH_64BIT
-    * Loading mod requires [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) installed.
-3. Build x86 and x64 libraries/executables in release or debug configuration using configured CMake.
-4. Run, test and report bugs and incompatibilities!
+Because GTA San Andreas is a 32-bit (`x86`) executable while the Vulkan ray-tracing driver runs out-of-process as a 64-bit (`x64`) executable over shared memory (`RenderHookTaskQueue`), build the two CMake trees separately:
+
+1. **Install `vcpkg` dependencies** (listed in `response_file.txt`) for both `x64-windows-static` and `x86-windows-static`.
+2. **Build the 64-bit Vulkan render driver (`gta_sa_render_driver.exe`):**
+   ```powershell
+   cmake -S . -B ../build/vs_x64 -G "Visual Studio 18 2026" -A x64 `
+     -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+     -DCMAKE_TOOLCHAIN_FILE="<vcpkg_root>/scripts/buildsystems/vcpkg.cmake" `
+     -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+     -DVCPKG_APPLOCAL_DEPS=OFF `
+     -DARCH_64BIT=ON -DBUILD_32BIT_LIBS=ON `
+     -DGTA_SA_FOLDER="../build/staging_gtasa"
+   cmake --build ../build/vs_x64 --config RelWithDebInfo --target gta_sa_render_driver
+   ```
+3. **Build the 32-bit GTA SA ASI hook (`gta_sa_render_hook.asi`):**
+   ```powershell
+   cmake -S . -B ../build/vs_x86 -G "Visual Studio 18 2026" -A Win32 `
+     -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+     -DCMAKE_TOOLCHAIN_FILE="<vcpkg_root>/scripts/buildsystems/vcpkg.cmake" `
+     -DVCPKG_TARGET_TRIPLET=x86-windows-static `
+     -DVCPKG_APPLOCAL_DEPS=OFF `
+     -DARCH_64BIT=OFF -DBUILD_32BIT_LIBS=ON `
+     -DGTA_SA_FOLDER="../build/staging_gtasa"
+   cmake --build ../build/vs_x86 --config RelWithDebInfo --target gta_sa_render_hook
+   ```
+   > Keep `-DVCPKG_APPLOCAL_DEPS=OFF` so a single-bitness `vulkan-1.dll` is never copied into the game folder shared by 32-bit `gta_sa.exe` (`SysWOW64\vulkan-1.dll`) and 64-bit `gta_sa_render_driver.exe` (`System32\vulkan-1.dll`).
+4. **Build and run unit, shader, and GPU tests (`build_x64` with Ninja):**
+   ```powershell
+   # Inside an x64 MSVC developer environment (vcvars64.bat):
+   cmake -S . -B ../build_x64 -G Ninja `
+     -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+     -DCMAKE_TOOLCHAIN_FILE="<vcpkg_root>/scripts/buildsystems/vcpkg.cmake" `
+     -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+     -DARCH_64BIT=ON -DBUILD_TESTS=ON
+   pwsh ./tools/test.ps1 -All
+   ```
 
 ## Tips
 

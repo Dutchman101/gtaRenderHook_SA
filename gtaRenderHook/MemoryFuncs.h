@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 static void Patch( void* address, void* data, SIZE_T size )
 {
     unsigned long protect[2];
@@ -18,21 +19,21 @@ static void SetPointer( INT_PTR address, void *value )
 }
 inline static void SetInt( INT_PTR address, int value )
 {
-    Patch( (void *)address, &value, sizeof( void* ) );
+    Patch( (void *)address, &value, sizeof( int ) );
 }
 inline static void RedirectCall( INT_PTR address, void *func )
 {
-    INT_PTR temp = 0xE8;
-    Patch( (void *)address, &temp, sizeof( unsigned char ) );
-    temp = (INT_PTR)func - ( (INT_PTR)address + 5 );
-    Patch( (void *)( (INT_PTR)address + 1 ), &temp, sizeof( void* ) );
+    unsigned char opcode = 0xE8;
+    Patch( (void *)address, &opcode, sizeof( opcode ) );
+    int32_t rel = static_cast<int32_t>( (INT_PTR)func - ( (INT_PTR)address + 5 ) );
+    Patch( (void *)( (INT_PTR)address + 1 ), &rel, sizeof( rel ) );
 }
 inline static void RedirectJump( INT_PTR address, void *func )
 {
-    INT_PTR temp = 0xE9;
-    Patch( (void *)address, &temp, sizeof( unsigned char ) );
-    temp = (INT_PTR)func - ( (INT_PTR)address + 5 );
-    Patch( (void *)( (INT_PTR)address + 1 ), &temp, sizeof( void* ) );
+    unsigned char opcode = 0xE9;
+    Patch( (void *)address, &opcode, sizeof( opcode ) );
+    int32_t rel = static_cast<int32_t>( (INT_PTR)func - ( (INT_PTR)address + 5 ) );
+    Patch( (void *)( (INT_PTR)address + 1 ), &rel, sizeof( rel ) );
 }
 inline static void Nop( INT_PTR address, SIZE_T size )
 {

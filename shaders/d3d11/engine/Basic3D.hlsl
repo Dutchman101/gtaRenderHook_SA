@@ -18,12 +18,11 @@ cbuffer CameraBuffer : register( b0 )
     float4x4 viewProjPrev;
 }
 
-BINDING( 1, 0 ) SamplerState s0 : register( ps, s0 );
-BINDING( 1, 1 ) Texture2D t0 : register( ps, t0 );
-// BINDING( 1, 0 ) SamplerState s0 : register( ps, s0 );
-// BINDING( 1, 1 ) Texture2D t0 : register( ps, t0 );
 BINDING( 1, 0 )
 cbuffer ObjectBuffer : register( b1 ) { float4x4 mWorld; }
+
+BINDING( 2, 0 ) SamplerState s0 : register( ps, s0 );
+BINDING( 2, 1 ) Texture2D t0 : register( ps, t0 );
 
 //--------------------------------------------------------------------------------------
 // Structures
@@ -56,7 +55,7 @@ PS_BASE3D_IN BaseVS( VS_BASE3D_IN i )
 
     o.vTexCoord = i.vTexCoord;
     o.cColor    = i.cColor.bgra;
-    o.vPosition = mul( mViewProj, world_pos ); // transform to clip space
+    o.vPosition = mul( viewProj, world_pos ); // transform to clip space
 
     return o;
 }
@@ -66,9 +65,7 @@ PS_BASE3D_IN BaseVS( VS_BASE3D_IN i )
 //--------------------------------------------------------------------------------------
 float4 NoTexPS( PS_BASE3D_IN i ) : SV_Target
 {
-    float4 OutColor;
-    OutColor.rgb = i.cColor;
-    // OutColor.r = fPadding.x;
+    float4 OutColor = i.cColor;
     return OutColor;
 }
 

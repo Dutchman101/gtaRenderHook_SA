@@ -8,6 +8,7 @@
 #include <injection_utils/InjectorHelpers.h>
 #include <material_storage.h>
 #include <rw_engine/rh_backend/material_backend.h>
+#include <string>
 
 using namespace rh::rw::engine;
 
@@ -35,13 +36,15 @@ RpMaterial *RpMaterialStreamRead( void *stream )
 
 RwTexture *ReadTextureCallback( std::string_view dict, std::string_view name )
 {
-    auto txd_slot = TxdStore::FindTxdSlot( dict.data() );
+    const std::string dict_name( dict );
+    const std::string tex_name( name );
+    auto              txd_slot = TxdStore::FindTxdSlot( dict_name.c_str() );
     if ( txd_slot < 0 )
         return nullptr;
     TxdStore::PushCurrentTxd();
 
     TxdStore::SetCurrentTxd( txd_slot );
-    auto texture = RwTextureRead( name.data(), nullptr );
+    auto texture = RwTextureRead( tex_name.c_str(), nullptr );
 
     TxdStore::PopCurrentTxd();
     return texture;

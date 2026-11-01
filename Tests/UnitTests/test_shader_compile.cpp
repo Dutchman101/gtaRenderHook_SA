@@ -180,3 +180,34 @@ TEST_CASE_FIXTURE( LogFixture, "shader/test_kernels_compile" )
     CAPTURE( failed );
     CHECK( failed.empty() );
 }
+
+TEST_CASE_FIXTURE( LogFixture, "shader/hlsl_engine_shaders_compile" )
+{
+    struct HlslEntry
+    {
+        const char *path;
+        const char *stage;
+        const char *entry;
+    };
+    constexpr HlslEntry entries[] = {
+        { "shaders/d3d11/engine/Im2D.hlsl", "vert", "BaseVS" },
+        { "shaders/d3d11/engine/Im2D.hlsl", "frag", "TexPS" },
+        { "shaders/d3d11/engine/Im2D.hlsl", "frag", "NoTexPS" },
+        { "shaders/d3d11/engine/Im2D.hlsl", "frag", "DepthMaskPS" },
+        { "shaders/d3d11/engine/Im3D.hlsl", "vert", "BaseVS" },
+        { "shaders/d3d11/engine/Im3D.hlsl", "frag", "TexPS" },
+        { "shaders/d3d11/engine/Im3D.hlsl", "frag", "NoTexPS" },
+        { "shaders/d3d11/engine/Basic3D.hlsl", "vert", "BaseVS" },
+        { "shaders/d3d11/engine/Basic3D.hlsl", "frag", "TexPS" },
+        { "shaders/d3d11/engine/Basic3D.hlsl", "frag", "NoTexPS" },
+    };
+
+    for ( const auto &item : entries )
+    {
+        CAPTURE( item.path );
+        CAPTURE( item.stage );
+        CAPTURE( item.entry );
+        CHECK( rh::engine::TranslateHLSL_to_SPIRV(
+            item.path, "unit_test_hlsl_tmp.spirv", item.stage, item.entry ) );
+    }
+}

@@ -5,6 +5,7 @@
 #include "material_storage.h"
 #include "common_headers.h"
 #include <DebugUtils/DebugLogger.h>
+#include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <utility>
@@ -47,8 +48,10 @@ void MaterialExtensionSystem::ParseMaterialDesc(
     std::ifstream filestream( mat_desc );
     if ( !filestream.is_open() )
     {
+        const std::string mat_desc_path = mat_desc.string();
         rh::debug::DebugLogger::ErrorFmt(
-            "Failed to open material description at %s", mat_desc.c_str() );
+            "Failed to open material description at %s",
+            mat_desc_path.c_str() );
         return;
     }
     auto &desc = mMaterials[mat_desc.stem().generic_string()];

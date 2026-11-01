@@ -116,8 +116,8 @@ void VulkanImGUI::Init( const VulkanImGUIInitParams &params )
 
     ImGui_ImplVulkan_InitInfo init_info = {};
 #if IMGUI_VERSION_NUM >= 19200
-#ifdef VK_API_VERSION_1_3
-    init_info.ApiVersion = VK_API_VERSION_1_3;
+#ifdef VK_API_VERSION_1_2
+    init_info.ApiVersion = VK_API_VERSION_1_2;
 #else
     init_info.ApiVersion = VK_API_VERSION_1_0;
 #endif

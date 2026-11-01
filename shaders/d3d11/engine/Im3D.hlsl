@@ -64,9 +64,7 @@ PS_IM3D_IN BaseVS( VS_IM3D_IN i )
 //--------------------------------------------------------------------------------------
 float4 NoTexPS( PS_IM3D_IN i ) : SV_Target
 {
-    float4 OutColor;
-    OutColor.rgb = i.cColor;
-    // OutColor.r = fPadding.x;
+    float4 OutColor = i.cColor;
     return OutColor;
 }
 

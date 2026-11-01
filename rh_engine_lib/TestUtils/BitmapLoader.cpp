@@ -16,6 +16,29 @@ void rh::tests::LoadBMPImage( std::string_view       path,
     assert( res_buffer != nullptr );
 
     auto fspath = std::filesystem::path( path );
+    if ( !std::filesystem::exists( fspath ) && fspath.is_relative() )
+    {
+        std::string module_path( 256, '\0' );
+        DWORD       module_len = 0;
+        while ( module_path.size() <= 32768 )
+        {
+            module_len = GetModuleFileNameA(
+                nullptr, module_path.data(),
+                static_cast<DWORD>( module_path.size() ) );
+            if ( module_len == 0 || module_len < module_path.size() )
+                break;
+            module_path.resize( module_path.size() * 2, '\0' );
+        }
+        if ( module_len > 0 && module_len < module_path.size() )
+        {
+            module_path.resize( module_len );
+            const auto candidate =
+                std::filesystem::path( module_path ).parent_path() / fspath;
+            if ( std::filesystem::exists( candidate ) )
+                fspath = candidate;
+        }
+    }
+
     if ( !std::filesystem::exists( fspath ) )
     {
         std::stringstream ss;

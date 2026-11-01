@@ -21,6 +21,7 @@ rh::engine::VulkanMemoryAllocator::VulkanMemoryAllocator(
     : mPhysDevice( create_info.mPhysicalDevice ), mDevice( create_info.mDevice )
 {
     VmaAllocatorCreateInfo allocatorInfo = {};
+    allocatorInfo.vulkanApiVersion       = VK_API_VERSION_1_2;
     allocatorInfo.instance               = create_info.mInstance;
     allocatorInfo.physicalDevice         = mPhysDevice;
     allocatorInfo.device                 = mDevice;

@@ -13,7 +13,7 @@ target_include_directories(rh_unit_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/Tests/Common"
         "${CMAKE_SOURCE_DIR}/rw_rh_engine_lib")
 
-target_link_libraries(rh_unit_tests PRIVATE rh_engine_lib)
+target_link_libraries(rh_unit_tests PRIVATE rw_rh_engine_lib rh_engine_lib)
 
 target_compile_definitions(rh_unit_tests PRIVATE USE_VULKAN_API VULKAN_HPP_NO_EXCEPTIONS)
 

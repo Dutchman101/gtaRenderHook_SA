@@ -300,8 +300,11 @@ VulkanDeviceState::VulkanDeviceState()
                 "VulkanDeviceState initialization failed, required "
                 "instance layers are unsupported:" );
             for ( const auto l : unsupported_layers )
+            {
+                const std::string layer_name( l );
                 DebugLogger::ErrorFmt( "\tinstance layer %s is unsupported!",
-                                       l );
+                                       layer_name.c_str() );
+            }
             return;
         }
     }
@@ -327,8 +330,11 @@ VulkanDeviceState::VulkanDeviceState()
                 "VulkanDeviceState initialization failed, required "
                 "instance extensions are unsupported:" );
             for ( const auto &ext : unsupported_extensions )
+            {
+                const std::string ext_name( ext );
                 DebugLogger::ErrorFmt( "\textension %s is unsupported!",
-                                       LogLevel::Info, ext );
+                                       ext_name.c_str() );
+            }
             return;
         }
     }

@@ -71,10 +71,13 @@ VulkanSwapchain::VulkanSwapchain(
                                        surface_formats.value );
     auto present_mode  = SelectPresentMode(
         create_params.mPresentParams.mVsyncType, surface_present_modes.value );
-    auto buffer_count =
-        std::min<>( std::max<>( surface_caps.value.minImageCount,
-                                create_params.mPresentParams.mBufferCount ),
-                    surface_caps.value.maxImageCount );
+    const auto desired_count =
+        ( std::max )( surface_caps.value.minImageCount,
+                      create_params.mPresentParams.mBufferCount );
+    const auto buffer_count =
+        surface_caps.value.maxImageCount > 0
+            ? ( std::min )( desired_count, surface_caps.value.maxImageCount )
+            : desired_count;
 
     // Swapchain creation
     vk::SwapchainCreateInfoKHR swapchain_info{};
