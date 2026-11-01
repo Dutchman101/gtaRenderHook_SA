@@ -6,6 +6,7 @@
 #include "MemoryReader.h"
 #include "MemoryWriter.h"
 #include <Windows.h>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -78,14 +79,19 @@ class SharedMemoryTaskQueue
 
     [[maybe_unused]] void WaitForExit();
     [[maybe_unused]] void SendExitEvent();
+    void SetPeerProcess( HANDLE process ) noexcept
+    {
+        mPeerProcess.store( process, std::memory_order_release );
+    }
 
   private:
-    void  *mMappedMemory{};
-    HANDLE mSharedMemory{};
-    HANDLE mMemoryMutex{};
-    HANDLE mTaskStartEvent{};
-    HANDLE mTaskFinishEvent{};
-    HANDLE mExitEvent{};
+    void               *mMappedMemory{};
+    HANDLE              mSharedMemory{};
+    HANDLE              mMemoryMutex{};
+    HANDLE              mTaskStartEvent{};
+    HANDLE              mTaskFinishEvent{};
+    HANDLE              mExitEvent{};
+    std::atomic<HANDLE> mPeerProcess{ nullptr };
     std::unordered_map<int64_t, std::unique_ptr<SharedMemoryTask>> mTaskMap;
 };
 

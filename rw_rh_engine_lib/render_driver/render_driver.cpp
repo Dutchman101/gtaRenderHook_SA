@@ -50,13 +50,6 @@ RenderDriver::RenderDriver()
                      rh::engine::EngineConfigBlock::It.SharedMemorySizeMB,
             .mOwner =
                 IPCSettings::mMode == IPCRenderMode::MultiThreadedRenderer } );
-
-    TaskQueueThread = std::make_unique<std::thread>(
-        [this]()
-        {
-            while ( IsRunning )
-                TaskQueue->TaskLoop();
-        } );
 }
 
 RenderDriver::~RenderDriver()
@@ -159,6 +152,19 @@ void RenderDriver::RegisterTasks()
     SkinnedMeshUnloadCmdImpl::RegisterCallHandler( task_queue );
 
     RenderSceneCmd::RegisterCallHandler( task_queue );
+
+    // Start polling shared memory only after gRenderDriver is assigned and all
+    // task handlers are registered in mTaskMap so early client requests cannot
+    // observe an empty handler table.
+    if ( !TaskQueueThread )
+    {
+        TaskQueueThread = std::make_unique<std::thread>(
+            [this]()
+            {
+                while ( IsRunning )
+                    TaskQueue->TaskLoop();
+            } );
+    }
 }
 
 } // namespace rh::rw::engine

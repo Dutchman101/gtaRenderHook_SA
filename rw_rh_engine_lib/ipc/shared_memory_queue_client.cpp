@@ -207,13 +207,42 @@ engine::SharedMemoryTaskQueue::~SharedMemoryTaskQueue()
     int64_t id, std::function<void( MemoryWriter &&reader )> &&serializer,
     std::function<void( MemoryReader &&writer )> &&deserializer )
 {
+    if ( mMemoryMutex == nullptr || mMappedMemory == nullptr ||
+         mTaskStartEvent == nullptr || mTaskFinishEvent == nullptr )
+    {
+        debug::DebugLogger::Error(
+            "Shared-memory task queue is uninitialized" );
+        return;
+    }
+
     WaitForSingleObject( mMemoryMutex, INFINITE );
+
+    HANDLE peer = mPeerProcess.load( std::memory_order_acquire );
+    if ( IPCSettings::mMode == IPCRenderMode::CrossProcessClient &&
+         peer == nullptr )
+    {
+        debug::DebugLogger::ErrorFmt(
+            "Render driver process is not running; skipping task %lld",
+            static_cast<long long>( id ) );
+        ReleaseMutex( mMemoryMutex );
+        return;
+    }
 
     *static_cast<int64_t *>( mMappedMemory ) = id;
     serializer( static_cast<char *>( mMappedMemory ) + sizeof( int64_t ) );
     SetEvent( mTaskStartEvent );
 
-    DWORD wait_res = WaitForSingleObject( mTaskFinishEvent, 100 );
+    auto wait_once = [this, &peer]() -> DWORD {
+        peer = mPeerProcess.load( std::memory_order_acquire );
+        if ( peer != nullptr )
+        {
+            HANDLE wait_handles[2] = { mTaskFinishEvent, peer };
+            return WaitForMultipleObjects( 2, wait_handles, FALSE, 100 );
+        }
+        return WaitForSingleObject( mTaskFinishEvent, 100 );
+    };
+
+    DWORD wait_res = wait_once();
     while ( wait_res == WAIT_TIMEOUT )
     {
         // skip msgs
@@ -223,7 +252,31 @@ engine::SharedMemoryTaskQueue::~SharedMemoryTaskQueue()
             TranslateMessage( &m );
             DispatchMessage( &m );
         }
-        wait_res = WaitForSingleObject( mTaskFinishEvent, 100 );
+        wait_res = wait_once();
+    }
+
+    if ( wait_res != WAIT_OBJECT_0 )
+    {
+        if ( wait_res == WAIT_OBJECT_0 + 1 && peer != nullptr )
+        {
+            DWORD exit_code = 0;
+            GetExitCodeProcess( peer, &exit_code );
+            debug::DebugLogger::ErrorFmt(
+                "Render driver process exited while handling task %lld (exit code: %lu)",
+                static_cast<long long>( id ),
+                static_cast<unsigned long>( exit_code ) );
+            mPeerProcess.store( nullptr, std::memory_order_release );
+        }
+        else
+        {
+            debug::DebugLogger::ErrorFmt(
+                "Waiting for task %lld failed (wait result: %lu, error: %lu)",
+                static_cast<long long>( id ),
+                static_cast<unsigned long>( wait_res ),
+                static_cast<unsigned long>( GetLastError() ) );
+        }
+        ReleaseMutex( mMemoryMutex );
+        return;
     }
 
     assert( *static_cast<int64_t *>( mMappedMemory ) == id );
@@ -233,12 +286,26 @@ engine::SharedMemoryTaskQueue::~SharedMemoryTaskQueue()
 }
 [[maybe_unused]] void engine::SharedMemoryTaskQueue::TaskLoop()
 {
+    if ( mTaskStartEvent == nullptr || mTaskFinishEvent == nullptr ||
+         mMappedMemory == nullptr )
+        return;
+
     auto idle_time = 1000L;
     if ( WaitForSingleObject( mTaskStartEvent, idle_time ) == WAIT_OBJECT_0 )
     {
         int64_t task_id = *static_cast<int64_t *>( mMappedMemory );
-        mTaskMap[task_id]->mExecute( static_cast<char *>( mMappedMemory ) +
-                                     sizeof( int64_t ) );
+        auto    it      = mTaskMap.find( task_id );
+        if ( it != mTaskMap.end() && it->second )
+        {
+            it->second->mExecute( static_cast<char *>( mMappedMemory ) +
+                                  sizeof( int64_t ) );
+        }
+        else
+        {
+            debug::DebugLogger::ErrorFmt(
+                "Unhandled shared-memory task id: %lld",
+                static_cast<long long>( task_id ) );
+        }
         SetEvent( mTaskFinishEvent );
     }
 }

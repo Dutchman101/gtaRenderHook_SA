@@ -21,7 +21,7 @@ bool StartSystemCmdImpl::Invoke( HWND window )
     TaskQueue.ExecuteTask( SharedMemoryTaskType::CREATE_WINDOW,
                            [window]( MemoryWriter &&memory_writer ) {
                                // serialize
-                               memory_writer.Write( &window );
+                               SerializeWindowHandle( memory_writer, window );
                            } );
     InstallWinProcHook();
     return true;
@@ -33,10 +33,13 @@ void CreateWindowTaskImpl( void *memory )
     MemoryWriter writer( memory );
 
     // execute
-    HWND wnd = *reader.Read<HWND>();
+    HWND wnd = StartSystemCmdImpl::DeserializeWindowHandle( reader );
     if ( !gRenderDriver->OpenMainWindow( wnd ) )
     {
-        debug::DebugLogger::ErrorFmt( "Failed to open window:%X", wnd );
+        debug::DebugLogger::ErrorFmt(
+            "Failed to open window:%llX",
+            static_cast<unsigned long long>(
+                reinterpret_cast<uintptr_t>( wnd ) ) );
         return;
     }
 }

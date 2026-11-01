@@ -39,6 +39,9 @@ RenderClient::RenderClient()
                      rh::engine::EngineConfigBlock::It.SharedMemorySizeMB,
             .mOwner = true } );
 
+    if ( IPCSettings::mMode != IPCRenderMode::CrossProcessClient )
+        return;
+
     /// Create render driver sub-process
     // Resolve relative driver names to the host executable folder and run the
     // driver in its own directory so launching gta_sa.exe from another working
@@ -85,14 +88,38 @@ RenderClient::RenderClient()
             "Failed to start render driver process (%s), error code: %lu",
             driver_path_str.c_str(), static_cast<unsigned long>( create_err ) );
     }
+    else
+    {
+        TaskQueue->SetPeerProcess( RenderDriverProcess.hProcess );
+    }
 }
 
 RenderClient::~RenderClient()
 {
-    TaskQueue->SendExitEvent();
-    TaskQueue.reset();
+    if ( TaskQueue )
+        TaskQueue->SendExitEvent();
+
+    // Keep TaskQueue mapped until the driver exits so named IPC handles remain
+    // valid while its 1000 ms task loop drains and shuts down Vulkan cleanly.
     if ( RenderDriverProcess.hProcess )
-        TerminateProcess( RenderDriverProcess.hProcess, 0 );
+    {
+        if ( WaitForSingleObject( RenderDriverProcess.hProcess, 2000 ) !=
+             WAIT_OBJECT_0 )
+        {
+            TerminateProcess( RenderDriverProcess.hProcess, 0 );
+        }
+        if ( TaskQueue )
+            TaskQueue->SetPeerProcess( nullptr );
+        CloseHandle( RenderDriverProcess.hProcess );
+        RenderDriverProcess.hProcess = nullptr;
+    }
+    if ( RenderDriverProcess.hThread )
+    {
+        CloseHandle( RenderDriverProcess.hThread );
+        RenderDriverProcess.hThread = nullptr;
+    }
+
+    TaskQueue.reset();
 }
 
 bool RenderClient::RegisterPlugins( const PluginPtrTable &plugin_cb )
