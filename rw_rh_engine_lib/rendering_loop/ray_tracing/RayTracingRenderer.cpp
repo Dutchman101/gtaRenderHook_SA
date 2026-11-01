@@ -550,6 +550,7 @@ RayTracingRenderer::GetFrameBuffer( const rh::engine::SwapchainFrame &frame,
     if ( mFrameWidth != frame.mWidth || mFrameHeight != frame.mHeight )
     {
         // Recreate depth buffer
+        delete mDepthBufferView;
         delete mDepthBuffer;
 
         ImageBufferCreateParams ds_buffer{};

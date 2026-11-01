@@ -6,6 +6,7 @@
 #include "im2d_backend.h"
 #include "im3d_backend.h"
 #include "raster_backend.h"
+#include <DebugUtils/DebugLogger.h>
 #include <Engine/Common/IDeviceState.h>
 #include <Engine/Common/types/blend_op.h>
 #include <Engine/Common/types/comparison_func.h>
@@ -236,6 +237,11 @@ uint64_t Im3DRenderer::Render( const Im3DRenderState      &state,
                                rh::engine::ICommandBuffer *cmd_buffer )
 {
     using namespace rh::engine;
+    if ( state.IndexBuffer.Size() > INDEX_COUNT_LIMIT )
+    {
+        debug::DebugLogger::Error( "Im3DRenderer index buffer capacity exceeded" );
+        return 0;
+    }
     // Update buffers
     if ( state.IndexBuffer.Size() > 0 )
         mIndexBuffer->Update( state.IndexBuffer.Data(),
@@ -245,6 +251,13 @@ uint64_t Im3DRenderer::Render( const Im3DRenderState      &state,
     uint64_t vertex_count = state.VertexBuffer.Size();
     if ( vertex_count <= 0 )
         return 0;
+
+    if ( ( mVertexBufferOffset / sizeof( RwIm3DVertex ) ) + vertex_count >
+         VERTEX_COUNT_LIMIT )
+    {
+        debug::DebugLogger::Error( "Im3DRenderer vertex buffer capacity exceeded" );
+        return 0;
+    }
 
     mVertexBuffer->Update( state.VertexBuffer.Data(),
                            vertex_count * sizeof( RwIm3DVertex ),
@@ -264,15 +277,19 @@ uint64_t Im3DRenderer::Render( const Im3DRenderState      &state,
     if ( draw_call_count <= 0 )
         return 0;
 
+    const auto matrix_size = Device.GetLimits().GetMinAlignedBufferEntrySize(
+        sizeof( DirectX::XMFLOAT4X4 ) );
     auto     vertex_offset = mVertexBufferOffset / sizeof( RwIm3DVertex );
     uint32_t dc_id         = 0;
-    auto    *matrix_buffers =
-        static_cast<DirectX::XMFLOAT4X4 *>( mMatrixBuffer->Lock() );
+    auto    *matrix_buffer_bytes =
+        static_cast<char *>( mMatrixBuffer->Lock() );
     for ( auto &draw_call : state.DrawCalls )
     {
         // Compute pipeline hash
         if ( draw_call.State.PrimType != 3 )
             continue;
+        if ( dc_id >= mMatrixDescriptorSetPool.size() )
+            break;
         PackedIm3DState s{};
         s.s_val.enableBlend = draw_call.State.BlendEnable;
         s.s_val.hasTexture =
@@ -282,13 +299,15 @@ uint64_t Im3DRenderer::Render( const Im3DRenderState      &state,
         s.s_val.zTestEnable    = draw_call.State.ZTestEnable;
         s.s_val.zWriteEnable   = draw_call.State.ZWriteEnable;
 
+        auto &dst_matrix = *reinterpret_cast<DirectX::XMFLOAT4X4 *>(
+            matrix_buffer_bytes + static_cast<size_t>( dc_id ) * matrix_size );
         std::copy( &draw_call.WorldTransform.m[0][0],
                    &draw_call.WorldTransform.m[0][0] + 3 * 4,
-                   &matrix_buffers[dc_id].m[0][0] );
-        matrix_buffers[dc_id].m[3][0] = 0.0f;
-        matrix_buffers[dc_id].m[3][1] = 0.0f;
-        matrix_buffers[dc_id].m[3][2] = 0.0f;
-        matrix_buffers[dc_id].m[3][3] = 1.0f;
+                   &dst_matrix.m[0][0] );
+        dst_matrix.m[3][0] = 0.0f;
+        dst_matrix.m[3][1] = 0.0f;
+        dst_matrix.m[3][2] = 0.0f;
+        dst_matrix.m[3][3] = 1.0f;
 
         cmd_buffer->BindDescriptorSets(
             { .mPipelineLayout       = mNoTexLayout,

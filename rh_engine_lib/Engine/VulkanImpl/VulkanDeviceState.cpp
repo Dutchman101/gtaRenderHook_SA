@@ -569,7 +569,7 @@ bool VulkanDeviceState::GetCurrentAdapter( unsigned int &id )
 
 bool VulkanDeviceState::SetCurrentAdapter( unsigned int id )
 {
-    if ( id > m_aAdapters.size() )
+    if ( id >= m_aAdapters.size() )
         return false;
     m_uiCurrentAdapter = id;
     return true;
@@ -578,7 +578,7 @@ bool VulkanDeviceState::SetCurrentAdapter( unsigned int id )
 bool VulkanDeviceState::GetOutputCount( unsigned int  adapterId,
                                         unsigned int &count )
 {
-    if ( adapterId > m_aAdapters.size() )
+    if ( adapterId >= m_aAdapters.size() )
         return false;
 
     count = static_cast<uint32_t>( m_aDisplayInfos.size() );
@@ -611,6 +611,8 @@ bool VulkanDeviceState::SetCurrentOutput( unsigned int id )
 bool VulkanDeviceState::GetDisplayModeCount( unsigned int  outputId,
                                              unsigned int &count )
 {
+    if ( outputId >= m_aDisplayInfos.size() )
+        return false;
     count = static_cast<uint32_t>(
         m_aDisplayInfos[outputId].m_aDisplayModes.size() );
     return true;
@@ -757,11 +759,11 @@ void VulkanDeviceState::ExecuteCommandBuffer( ICommandBuffer *buffer,
     vk::SubmitInfo queue_submit_info{};
     queue_submit_info.commandBufferCount = 1;
     queue_submit_info.pCommandBuffers    = &cmd_buffer;
+    std::array<vk::PipelineStageFlags, 1> stage_flags{
+        vk::PipelineStageFlagBits::eTopOfPipe };
 
     if ( waitFor != nullptr )
     {
-        std::array<vk::PipelineStageFlags, 1> stage_flags{
-            vk::PipelineStageFlagBits::eTopOfPipe };
         auto vk_wait_for_sp = dynamic_cast<VulkanGPUSyncPrimitive *>( waitFor );
         assert( vk_wait_for_sp );
         wait_semaphores = ( static_cast<vk::Semaphore>( *vk_wait_for_sp ) );
@@ -1058,10 +1060,16 @@ VulkanComputePipeline *VulkanDeviceState::CreateComputePipeline(
 void VulkanDeviceState::DispatchToGPU(
     const ArrayProxy<CommandBufferSubmitInfo> &buffers )
 {
+    if ( buffers.Size() == 0 )
+        return;
+
     // TODO: rewrite or something
     std::vector<std::vector<vk::Semaphore>>          q_sm_waitable_vec{};
     std::vector<std::vector<vk::PipelineStageFlags>> q_sm_stage_flags_vec{};
     std::vector<vk::SubmitInfo>                      queue_submit_info_vec{};
+    q_sm_waitable_vec.reserve( buffers.Size() );
+    q_sm_stage_flags_vec.reserve( buffers.Size() );
+    queue_submit_info_vec.reserve( buffers.Size() );
 
     // std::array<vk::PipelineStageFlags, 1> stage_flags{
     //    vk::PipelineStageFlagBits::eBottomOfPipe };

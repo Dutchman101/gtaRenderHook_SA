@@ -3,6 +3,7 @@
 //
 
 #include "im2d_renderer.h"
+#include <DebugUtils/DebugLogger.h>
 #include <ipc/MemoryReader.h>
 #include <render_client/im2d_state_recorder.h>
 #include <render_driver/gpu_resources/raster_pool.h>
@@ -227,6 +228,8 @@ Im2DRenderer::Im2DRenderer( rh::engine::IDeviceState &device,
 Im2DRenderer::~Im2DRenderer()
 {
     RasterPool.RemoveOnDestructCallback( Im2DCallbackId );
+    mIm2DPipelines.clear();
+    mSamplerCache.clear();
     delete mPipelineTex;
     delete mPipelineNoTex;
     delete mDepthMaskPipeline;
@@ -281,6 +284,11 @@ uint64_t Im2DRenderer::Render( const Im2DRenderState      &state,
                                rh::engine::ICommandBuffer *cmd_buffer )
 {
     using namespace rh::engine;
+    if ( state.IndexBuffer.Size() > INDEX_COUNT_LIMIT )
+    {
+        debug::DebugLogger::Error( "Im2DRenderer index buffer capacity exceeded" );
+        return 0;
+    }
     // Update buffers
     if ( state.IndexBuffer.Size() > 0 )
         mIndexBuffer->Update( state.IndexBuffer.Data(),
@@ -289,9 +297,17 @@ uint64_t Im2DRenderer::Render( const Im2DRenderState      &state,
     if ( state.VertexBuffer.Size() <= 0 )
         return 0;
 
+    if ( ( mVertexBufferOffset / sizeof( RwIm2DVertex ) ) +
+             state.VertexBuffer.Size() >
+         VERTEX_COUNT_LIMIT )
+    {
+        debug::DebugLogger::Error( "Im2DRenderer vertex buffer capacity exceeded" );
+        return 0;
+    }
+
     auto current_display_mode = [this]()
     {
-        uint32_t display_mode;
+        uint32_t display_mode = 0;
         Device.GetCurrentDisplayMode( display_mode );
         DisplayModeInfo info{};
         Device.GetDisplayModeInfo( display_mode, info );
@@ -301,11 +317,16 @@ uint64_t Im2DRenderer::Render( const Im2DRenderState      &state,
     // Transform to screen-space
     // TODO: at the moment this doesn't fit well, maybe move that to a different
     // place
-    for ( auto &vtx : std::span( (RwIm2DVertex *)state.VertexBuffer.Data(),
-                                 state.VertexBuffer.Size() ) )
+    if ( current_display_mode.width > 0 && current_display_mode.height > 0 )
     {
-        vtx.x = vtx.x * ( 2.0f / float( current_display_mode.width ) ) - 1.0f;
-        vtx.y = vtx.y * ( 2.0f / float( current_display_mode.height ) ) - 1.0f;
+        for ( auto &vtx : std::span( (RwIm2DVertex *)state.VertexBuffer.Data(),
+                                     state.VertexBuffer.Size() ) )
+        {
+            vtx.x =
+                vtx.x * ( 2.0f / float( current_display_mode.width ) ) - 1.0f;
+            vtx.y =
+                vtx.y * ( 2.0f / float( current_display_mode.height ) ) - 1.0f;
+        }
     }
 
     mVertexBuffer->Update( state.VertexBuffer.Data(),
@@ -381,12 +402,18 @@ void Im2DRenderer::DrawQuad( rh::engine::IImageView     *texture,
 
     std::array<RwIm2DVertex, 6> quad{
         RwIm2DVertex{ -1, -1, 0, 0, 0xFFFFFFFF, 0.0f, 0.0f },
-        RwIm2DVertex{ w, h, -1, 0, 0xFFFFFFFF, 1.0f, 1.0f },
+        RwIm2DVertex{ w, h, 0, 0, 0xFFFFFFFF, 1.0f, 1.0f },
         RwIm2DVertex{ -1, h, 0, 0, 0xFFFFFFFF, 0.0f, 1.0f },
         RwIm2DVertex{ -1, -1, 0, 0, 0xFFFFFFFF, 0.0f, 0.0f },
         RwIm2DVertex{ w, -1, 0, 0, 0xFFFFFFFF, 1.0f, 0.0f },
         RwIm2DVertex{ w, h, 0, 0, 0xFFFFFFFF, 1.0f, 1.0f } };
 
+    if ( ( mVertexBufferOffset / sizeof( RwIm2DVertex ) ) + quad.size() >
+         VERTEX_COUNT_LIMIT )
+        return;
+
+    const auto first_vertex =
+        static_cast<uint32_t>( mVertexBufferOffset / sizeof( RwIm2DVertex ) );
     mVertexBuffer->Update( quad.data(), 6 * sizeof( RwIm2DVertex ),
                            mVertexBufferOffset );
     mVertexBufferOffset += 6 * sizeof( RwIm2DVertex );
@@ -425,7 +452,7 @@ void Im2DRenderer::DrawQuad( rh::engine::IImageView     *texture,
     cmd_buffer->BindVertexBuffers( 0, vbuffers );
 
     cmd_buffer->BindPipeline( mPipelineTex );
-    cmd_buffer->Draw( 6, 1, 0, 0 );
+    cmd_buffer->Draw( 6, 1, first_vertex, 0 );
 }
 
 rh::engine::IDescriptorSet *
@@ -474,8 +501,15 @@ void Im2DRenderer::DrawQuad( uint64_t                    texture_id,
         RwIm2DVertex{ w, -1, 0, 0, 0xFFFFFFFF, 1.0f, 0.0f },
         RwIm2DVertex{ w, h, 0, 0, 0xFFFFFFFF, 1.0f, 1.0f } };
 
+    if ( ( mVertexBufferOffset / sizeof( RwIm2DVertex ) ) + quad.size() >
+         VERTEX_COUNT_LIMIT )
+        return;
+
+    const auto first_vertex =
+        static_cast<uint32_t>( mVertexBufferOffset / sizeof( RwIm2DVertex ) );
     mVertexBuffer->Update( quad.data(), quad.size() * sizeof( RwIm2DVertex ),
-                           0 );
+                           mVertexBufferOffset );
+    mVertexBufferOffset += quad.size() * sizeof( RwIm2DVertex );
 
     cmd_buffer->BindPipeline( mPipelineTex );
 
@@ -491,7 +525,7 @@ void Im2DRenderer::DrawQuad( uint64_t                    texture_id,
     cmd_buffer->BindVertexBuffers(
         0, { { mVertexBuffer, 0, sizeof( RwIm2DVertex ) } } );
 
-    cmd_buffer->Draw( 6, 1, 0, 0 );
+    cmd_buffer->Draw( 6, 1, first_vertex, 0 );
 }
 void Im2DRenderer::Reset() { mVertexBufferOffset = 0; }
 
@@ -605,6 +639,12 @@ void Im2DRenderer::DrawDepthMask( rh::engine::IImageView     *texture,
         RwIm2DVertex{ w, -1, 0, 0, 0xFFFFFFFF, 1.0f, 0.0f },
         RwIm2DVertex{ w, h, 0, 0, 0xFFFFFFFF, 1.0f, 1.0f } };
 
+    if ( ( mVertexBufferOffset / sizeof( RwIm2DVertex ) ) + quad.size() >
+         VERTEX_COUNT_LIMIT )
+        return;
+
+    const auto first_vertex =
+        static_cast<uint32_t>( mVertexBufferOffset / sizeof( RwIm2DVertex ) );
     mVertexBuffer->Update( quad.data(), 6 * sizeof( RwIm2DVertex ),
                            mVertexBufferOffset );
     mVertexBufferOffset += 6 * sizeof( RwIm2DVertex );
@@ -643,7 +683,7 @@ void Im2DRenderer::DrawDepthMask( rh::engine::IImageView     *texture,
     cmd_buffer->BindVertexBuffers( 0, vbuffers );
 
     cmd_buffer->BindPipeline( mDepthMaskPipeline );
-    cmd_buffer->Draw( 6, 1, 0, 0 );
+    cmd_buffer->Draw( 6, 1, first_vertex, 0 );
 }
 
 } // namespace rh::rw::engine

@@ -189,6 +189,8 @@ void VulkanImGUI::BeginFrame()
 VulkanImGUI::~VulkanImGUI()
 {
     ImGui_ImplVulkan_Shutdown();
+    if ( ImGui::GetCurrentContext() != nullptr )
+        ImGui::DestroyContext();
     vkDestroyDescriptorPool( mDevice, mDescriptorPool, nullptr );
     // ImGui_ImplWin32_Shutdown();
 }

@@ -157,12 +157,13 @@ SwapchainFrame VulkanSwapchain::GetAvailableFrame( ISyncPrimitive *signal )
 bool VulkanSwapchain::Present( uint32_t swapchain_img, ISyncPrimitive *waitFor )
 {
     vk::PresentInfoKHR present_info{};
+    vk::Semaphore      vk_wait_prim_impl{};
     present_info.swapchainCount = 1;
     present_info.pSwapchains    = &m_vkSwapChain;
     if ( waitFor )
     {
         auto vk_wait_prim = static_cast<VulkanGPUSyncPrimitive *>( waitFor );
-        auto vk_wait_prim_impl = static_cast<vk::Semaphore>( *vk_wait_prim );
+        vk_wait_prim_impl = static_cast<vk::Semaphore>( *vk_wait_prim );
         present_info.waitSemaphoreCount = 1;
         present_info.pWaitSemaphores    = &vk_wait_prim_impl;
     }

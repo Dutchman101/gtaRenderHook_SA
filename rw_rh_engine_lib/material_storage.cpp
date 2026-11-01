@@ -65,8 +65,11 @@ void MaterialExtensionSystem::ParseMaterialDesc(
                             : "";
 
         desc.mSpecularTextureName.fill( 0 );
-        std::copy( tex_name.begin(), tex_name.end(),
-                   desc.mSpecularTextureName.begin() );
+        const auto copy_len =
+            ( std::min )( tex_name.size(),
+                          desc.mSpecularTextureName.size() - 1 );
+        std::copy_n( tex_name.data(), copy_len,
+                     desc.mSpecularTextureName.begin() );
 
         desc.mTextureDictName =
             desc_json.contains( "tex_dict_slot_name" )

@@ -47,6 +47,12 @@ void Im3DStateRecorder::Transform( RwIm3DVertex *vertices, uint32_t count,
 
 void Im3DStateRecorder::RenderPrimitive( RwPrimitiveType prim_type )
 {
+    if ( StashedVertices == nullptr || StashedVerticesCount == 0 ||
+         DrawCallCount >= DrawCalls.size() ||
+         VertexCount + static_cast<uint64_t>( StashedVerticesCount ) >
+             VertexBuffer.size() )
+        return;
+
     auto &result_dc = DrawCalls[DrawCallCount];
 
     result_dc.IndexBufferOffset  = IndexCount;
@@ -75,6 +81,15 @@ void Im3DStateRecorder::RenderIndexedPrimitive( RwPrimitiveType prim_type,
                                                 uint16_t       *indices,
                                                 int32_t         num_indices )
 {
+    if ( StashedVertices == nullptr || StashedVerticesCount == 0 ||
+         indices == nullptr || num_indices <= 0 ||
+         DrawCallCount >= DrawCalls.size() ||
+         VertexCount + static_cast<uint64_t>( StashedVerticesCount ) >
+             VertexBuffer.size() ||
+         IndexCount + static_cast<uint64_t>( num_indices ) >
+             IndexBuffer.size() )
+        return;
+
     auto &result_dc = DrawCalls[DrawCallCount];
 
     result_dc.IndexBufferOffset  = IndexCount;

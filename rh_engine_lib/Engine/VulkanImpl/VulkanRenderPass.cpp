@@ -100,6 +100,8 @@ VulkanRenderPass::VulkanRenderPass(
 
     vector<vk::SubpassDescription> subpass_desc_list;
     vector<cppVkSubpassDesc>       subpass_desc_list_temp;
+    subpass_desc_list.reserve( create_info.mDesc.mSubpasses.size() );
+    subpass_desc_list_temp.reserve( create_info.mDesc.mSubpasses.size() );
 
     for ( const auto &subpass_desc : create_info.mDesc.mSubpasses )
     {
@@ -117,7 +119,7 @@ VulkanRenderPass::VulkanRenderPass(
         static_cast<uint32_t>( subpass_desc_list.size() );
     auto result = m_vkDevice.createRenderPass( vk_create_info );
     if ( !CALL_VK_API( result.result,
-                       TEXT( "Failed to create acceleration structure!" ) ) )
+                       TEXT( "Failed to create render pass!" ) ) )
         return;
     m_vkRenderPass = result.value;
 }

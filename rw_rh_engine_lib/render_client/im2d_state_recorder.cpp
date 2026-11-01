@@ -30,6 +30,12 @@ Im2DStateRecorder::~Im2DStateRecorder() noexcept = default;
 void Im2DStateRecorder::RecordDrawCall( RwIm2DVertex *vertices,
                                         int32_t       num_vertices )
 {
+    if ( vertices == nullptr || num_vertices <= 0 ||
+         DrawCallCount >= DrawCalls.size() ||
+         VertexCount + static_cast<uint64_t>( num_vertices ) >
+             VertexBuffer.size() )
+        return;
+
     auto &result_dc = DrawCalls[DrawCallCount];
     auto &im_state  = ImState;
 
@@ -57,6 +63,14 @@ void Im2DStateRecorder::RecordDrawCall( RwIm2DVertex *vertices,
                                         int32_t num_vertices, int16_t *indices,
                                         int32_t num_indices )
 {
+    if ( vertices == nullptr || num_vertices <= 0 || indices == nullptr ||
+         num_indices <= 0 || DrawCallCount >= DrawCalls.size() ||
+         VertexCount + static_cast<uint64_t>( num_vertices ) >
+             VertexBuffer.size() ||
+         IndexCount + static_cast<uint64_t>( num_indices ) >
+             IndexBuffer.size() )
+        return;
+
     auto &result_dc = DrawCalls[DrawCallCount];
     auto &im_state  = ImState;
 

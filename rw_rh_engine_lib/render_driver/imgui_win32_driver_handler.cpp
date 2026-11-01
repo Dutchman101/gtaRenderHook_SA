@@ -117,7 +117,7 @@ bool ImGuiWin32DriverHandler::Init( void *hwnd )
 {
     if ( !::QueryPerformanceFrequency( &TicksPerSecond ) )
         return false;
-    if ( !::QueryPerformanceCounter( &TicksPerSecond ) )
+    if ( !::QueryPerformanceCounter( &Time ) )
         return false;
     Window = static_cast<HWND>( hwnd );
 
@@ -228,8 +228,13 @@ void ImGuiWin32DriverHandler::NewFrame( const ImGuiInputState &state )
     // Setup time step
     LARGE_INTEGER current_time = { 0ll };
     ::QueryPerformanceCounter( &current_time );
-    io.DeltaTime = (float)( current_time.QuadPart - Time.QuadPart ) /
-                   TicksPerSecond.QuadPart;
+    const LONGLONG delta_ticks = current_time.QuadPart - Time.QuadPart;
+    io.DeltaTime =
+        ( TicksPerSecond.QuadPart > 0 && delta_ticks > 0 )
+            ? static_cast<float>( static_cast<double>( delta_ticks ) /
+                                  static_cast<double>(
+                                      TicksPerSecond.QuadPart ) )
+            : ( 1.0f / 60.0f );
     Time = current_time;
 
     // Read keyboard modifiers and key inputs. Dear ImGui 1.87+ removed the

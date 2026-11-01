@@ -45,6 +45,8 @@ RasterData ReadBMP( const std::string &path )
 
     rh::tests::LoadBMPImage( path, gRenderDriver->GetDeviceState(),
                              &result_data.mImageBuffer );
+    if ( result_data.mImageBuffer == nullptr )
+        return result_data;
 
     rh::engine::ImageViewCreateInfo shader_view_ci{};
     shader_view_ci.mBuffer = result_data.mImageBuffer;
