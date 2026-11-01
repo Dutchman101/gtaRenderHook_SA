@@ -51,9 +51,9 @@ Long version:
 4) Visual Studio C++ toolchain with C++20 support
 5) GTA San Andreas `v1.0 US` + [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) (`winmm.dll`, Win32)
 
-## Build & Test Workflow
+## Build, Test & Live Game Deployment Workflow
 
-Because GTA San Andreas is a 32-bit (`x86`) executable while the Vulkan ray-tracing driver runs out-of-process as a 64-bit (`x64`) executable over shared memory (`RenderHookTaskQueue`), build the two CMake trees separately:
+Because GTA San Andreas is a 32-bit (`x86`) executable while the Vulkan ray-tracing driver runs out-of-process as a 64-bit (`x64`) executable over shared memory (`RenderHookTaskQueue`), build the two CMake trees separately and deploy non-destructively to a GTA SA `v1.0 US` installation:
 
 1. **Install `vcpkg` dependencies** (listed in `response_file.txt`) for both `x64-windows-static` and `x86-windows-static`.
 2. **Build the 64-bit Vulkan render driver (`gta_sa_render_driver.exe`):**
@@ -89,6 +89,15 @@ Because GTA San Andreas is a 32-bit (`x86`) executable while the Vulkan ray-trac
      -DARCH_64BIT=ON -DBUILD_TESTS=ON
    pwsh ./tools/test.ps1 -All
    ```
+5. **Redeploy to the live GTA SA `v1.0 US` folder for continuous testing after your code changes:**
+   ```powershell
+   # Initial deploy (Ultimate ASI Loader winmm.dll + RenderHook runtime package):
+   pwsh ./tools/deploy_to_game.ps1 -GameDir "<path_to_gta_sa>" -InstallAsiLoader
+
+   # Subsequent code/shader iterations (updates only RenderHook binaries, shaders, and resources):
+   pwsh ./tools/deploy_to_game.ps1 -GameDir "<path_to_gta_sa>"
+   ```
+   `tools/deploy_to_game.ps1` verifies PE architectures (`0x014C` x86 ASI + `0x8664` x64 driver), preserves all original GTA SA files (`gta_sa.exe`, `vorbisFile.dll`, `vorbis.dll`, `ogg.dll`, `eax.dll`, `stream.ini`) untouched, and blocks conflicting deployment alongside the legacy DirectX 11 `gtaRenderHook.asi`.
 
 ## Tips
 
