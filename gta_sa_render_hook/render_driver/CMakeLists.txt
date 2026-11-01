@@ -23,7 +23,7 @@ if (NOT "${GTA_SA_FOLDER}" STREQUAL "")
 endif ()
 target_compile_definitions(${PROJECT_NAME} PRIVATE -DUSE_VULKAN_API)
 
-target_link_libraries(${PROJECT_NAME} $ENV{VULKAN_SDK}/Lib/vulkan-1.lib rh_engine_lib rw_rh_engine_lib)
+target_link_libraries(${PROJECT_NAME} Vulkan::Vulkan rh_engine_lib rw_rh_engine_lib)
 
 include("${CMAKE_SOURCE_DIR}/cmake/resource_install.cmake")
 
@@ -35,4 +35,4 @@ copy_resources_to_build_dir(${PROJECT_NAME} "${CMAKE_SOURCE_DIR}/rw_rh_engine_li
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
-        $ENV{VULKAN_SDK}\\Bin\\glslangValidator.exe $<TARGET_FILE_DIR:${PROJECT_NAME}>/)
+        "$ENV{VULKAN_SDK}/Bin/glslangValidator.exe" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/")
