@@ -19,6 +19,7 @@
 #include "CustomCarFXPipeline.h"
 #include "DeferredRenderer.h"
 #include "D3D1XVertexDeclarationManager.h"
+#include <game_sa\CScene.h>
 #include "D3D1XRenderBuffersManager.h"
 #include "D3D1XTextureMemoryManager.h"
 #include "CustomSeabedPipeline.h"
@@ -813,6 +814,7 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
     projTransformRef->m[3].x = -( ( camera->viewOffset.x ) * camera->recipViewWindow.x );
     projTransformRef->m[3].y = -( ( camera->viewOffset.y ) * camera->recipViewWindow.y );
 
+    const bool reversedZ = IsReversedZCamera( camera );
     if ( camera->projectionType == rwPARALLEL )
     {
         projTransformRef->m[2].z = 1.0f / ( camera->farPlane - camera->nearPlane );
@@ -826,6 +828,13 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
         projTransformRef->m[3].w = 0;
     }
     projTransformRef->m[3].z = -( projTransformRef->m[2].z * camera->nearPlane );
+    if ( reversedZ )
+    {
+        // Remap standard [0, 1] depth to [1, 0] (near = 1, far = 0) so float depth retains far-distance precision.
+        projTransformRef->m[2].z = projTransformRef->m[2].w - projTransformRef->m[2].z;
+        projTransformRef->m[3].z = projTransformRef->m[3].w - projTransformRef->m[3].z;
+    }
+    g_pStateMgr->SetReversedZ( reversedZ );
     // compute view-projection transform
     RwD3D9ActiveViewProjTransform = nullptr;
     g_pRenderBuffersMgr->UpdateViewProjMatricles( *(RwMatrix*)viewTransformRef, *(RwMatrix*)projTransformRef );
@@ -870,7 +879,14 @@ bool CRwD3D1XEngine::CameraEndUpdate( RwCamera *camera )
         //d3dRaster->resourse->EndRendering();
         m_pRenderer->EndUpdate( camera );
     dgGGlobals = nullptr;
+    g_pStateMgr->SetReversedZ( false );
     return true;
+}
+
+bool CRwD3D1XEngine::IsReversedZCamera( RwCamera *camera )
+{
+    // Restrict reversed Z to the main scene camera so shadow maps and auxiliary passes keep standard depth comparisons.
+    return camera != nullptr && camera == Scene.m_pRwCamera;
 }
 
 bool CRwD3D1XEngine::RasterShowRaster( RwRaster *raster, UINT flags )
@@ -1024,24 +1040,13 @@ RwBool CRwD3D1XEngine::DefaultInstanceCallback( void *object, RxD3D9ResEntryHead
 RwBool CRwD3D1XEngine::Im3DSubmitNode()
 {
     rwIm3DPool* pool = rwD3D9ImmPool;
+    if ( pool == nullptr )
+        return true;
     if ( pool->stash.flags&rwIM3D_ALLOPAQUE )
         g_pStateMgr->SetAlphaBlendEnable( false );
     else
         g_pStateMgr->SetAlphaBlendEnable( true );
-    RwMatrix *ltm = pool->stash.ltm;
-    if ( ltm )
-    {
-        g_pRenderBuffersMgr->UpdateWorldMatrix( ltm );
-    }
-    else
-    {
-        RwMatrix identity{};
-        identity.right.x = 1.0f;
-        identity.up.y = 1.0f;
-        identity.at.z = 1.0f;
-        identity.pad3 = 0x3F800000;
-        g_pRenderBuffersMgr->UpdateWorldMatrix( &identity );
-    }
+    g_pRenderBuffersMgr->UpdateWorldMatrix( pool->stash.ltm );
     g_pRenderBuffersMgr->SetMatrixBuffer();
     return m_pIm3DPipe->SubmitNode();
 }

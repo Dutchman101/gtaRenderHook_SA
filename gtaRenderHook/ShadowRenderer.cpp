@@ -10,8 +10,11 @@
 #include "RwMethods.h"
 #include "D3D1XBuffer.h"
 #include <game_sa\CScene.h>
+#include <game_sa\CCamera.h>
 #include "DeferredRenderer.h"
 #include "D3D1XRenderBuffersManager.h"
+#include "D3D1XShader.h"
+#include "FullscreenQuad.h"
 RW::BBox	CShadowRenderer::m_LightBBox[4];
 RwV3d	CShadowRenderer::m_LightPos[4];
 RW::Matrix	CShadowRenderer::m_LightSpaceMatrix[4];
@@ -37,6 +40,8 @@ CShadowRenderer::CShadowRenderer()
     RwObjectHasFrameSetFrame( m_pShadowCamera, RwFrameCreate() );
     RpWorldAddCamera( Scene.m_pRpWorld, m_pShadowCamera );
     m_pLightViewProj = nullptr;
+    // any pixel shader will do for clearing a depth-only target; the blit shader is always available
+    m_pDepthClearPS = new CD3D1XPixelShader( "shaders/Quad.hlsl", "BlitPS" );
 
     m_pLightCB = new CD3D1XConstantBuffer<CBShadows>();
     m_pLightCB->SetDebugName( "ShadowsCB" );
@@ -48,6 +53,7 @@ CShadowRenderer::CShadowRenderer()
 CShadowRenderer::~CShadowRenderer()
 {
     delete m_pLightCB;
+    delete m_pDepthClearPS;
     RwRasterDestroy( m_pShadowCamera->zBuffer );
     RwCameraDestroy( m_pShadowCamera );
 }
@@ -82,14 +88,34 @@ RW::V3d CShadowRenderer::CalculateCameraPos( RwCamera* mainCam, const RW::V3d & 
 
     RwCameraSync(mainCam);*/
 
-    RW::V3d vFrustumCorners[8];
-    CalculateFrustumPoints( m_fShadowDistances[shadowCascade], m_fShadowDistances[shadowCascade + 1], mainCam, m_vFrustumCorners[shadowCascade] );
-    // Transform frustum corners in light space
-    for ( UINT i = 0; i < 8; i++ )
-        vFrustumCorners[i] = m_vFrustumCorners[shadowCascade][i] * m_LightSpaceMatrix[shadowCascade];
-    // Generate light-aligned Bounding Box from frustum corners in light space
-    m_LightBBox[shadowCascade] = { vFrustumCorners, 8 };
-    vFrustrumCenter = m_LightBBox[shadowCascade].getCenter()*m_InvLightSpaceMatrix[shadowCascade];
+    const RwReal fNear = m_fShadowDistances[shadowCascade], fFar = m_fShadowDistances[shadowCascade + 1];
+    CalculateFrustumPoints( fNear, fFar, mainCam, m_vFrustumCorners[shadowCascade] );
+
+    // Stable cascade: enclose the frustum slice in its smallest bounding sphere. Its radius depends only on the slice
+    // distances and the field of view, so the cascade keeps its size while the camera turns (a box fitted to the corners
+    // grows and shrinks, which makes every shadow edge crawl). The sphere's centre lies on the view axis where the near
+    // and far corners are equally far away.
+    const RwReal halfDiag = sqrtf( mainCam->viewWindow.x * mainCam->viewWindow.x + mainCam->viewWindow.y * mainCam->viewWindow.y );
+    const RwReal nearRadius = halfDiag * fNear, farRadius = halfDiag * fFar;
+    RwReal centerDist = ( fFar * fFar + farRadius * farRadius - fNear * fNear - nearRadius * nearRadius ) / ( 2.0f * ( fFar - fNear ) );
+    centerDist = min( max( centerDist, fNear ), fFar );
+    RwReal radius = max( sqrtf( ( centerDist - fNear ) * ( centerDist - fNear ) + nearRadius * nearRadius ),
+                         sqrtf( ( fFar - centerDist ) * ( fFar - centerDist ) + farRadius * farRadius ) );
+    radius = ceilf( radius * 16.0f ) / 16.0f; // no float noise in the cascade size
+
+    RwMatrix *camMatrix = RwFrameGetMatrix( RwCameraGetFrame( mainCam ) );
+    RW::V3d camPos = *RwMatrixGetPos( camMatrix );
+    RW::V3d camAt = *RwMatrixGetAt( camMatrix );
+    RW::V3d center = camPos + camAt * centerDist;
+
+    // Move the centre in whole shadow-map texels (in light space), so the texel grid stays fixed in the world and static
+    // shadows don't shimmer when the camera moves.
+    const RwReal texelSize = 2.0f * radius / static_cast<RwReal>( gShadowSettings.Size );
+    RW::V3d lightCenter = center * m_LightSpaceMatrix[shadowCascade];
+    lightCenter = { floorf( lightCenter.getX() / texelSize ) * texelSize, floorf( lightCenter.getY() / texelSize ) * texelSize,
+                    lightCenter.getZ() };
+    m_LightBBox[shadowCascade] = { lightCenter - RW::V3d{ radius, radius, radius }, lightCenter + RW::V3d{ radius, radius, radius } };
+    vFrustrumCenter = lightCenter * m_InvLightSpaceMatrix[shadowCascade];
     /*RwCameraSetNearClipPlane(mainCam, oldNP);
     RwCameraSetFarClipPlane(mainCam, oldFP);
     RwCameraSync(mainCam);*/
@@ -119,8 +145,8 @@ void CShadowRenderer::CalculateFrustumPoints( RwReal fNear, RwReal fFar, RwCamer
     RW::V3d farBottom = farCenter - camUp * farHeight*0.5f;
     RW::V3d farTop = farCenter + camUp * farHeight*0.5f;
 
-    RW::V3d farRightOffset = camRight * ( nearWidth*0.5f );
-    RW::V3d nearRightOffset = camRight * ( farWidth*0.5f );
+    RW::V3d farRightOffset = camRight * ( farWidth*0.5f );
+    RW::V3d nearRightOffset = camRight * ( nearWidth*0.5f );
 
     // near plane
     points[0] = nearBottom - nearRightOffset;
@@ -136,8 +162,48 @@ void CShadowRenderer::CalculateFrustumPoints( RwReal fNear, RwReal fFar, RwCamer
 
 }
 
+void CShadowRenderer::SelectCascadesToUpdate( const RW::V3d &lightDir )
+{
+    const UINT interval = max( gShadowSettings.GetUInt( "FarCascadeUpdateInterval" ), 1u );
+    RW::V3d dir = lightDir;
+    dir.normalize();
+    // the sun moves slowly; a jump means a switch between sun and moon, or a teleport of the time of day
+    const bool lightJumped = dir.dot( m_vLastLightDir ) < 0.9999f;
+    m_vLastLightDir = dir;
+    const bool full = m_bForceFullUpdate || !m_bShadowHistoryValid || lightJumped || interval == 1;
+    m_bForceFullUpdate = false;
+    // the first two cascades cover the view up close, where moving objects and their shadows are; further cascades
+    // take turns, so a frame never re-renders more than one of them when the interval is at least their count
+    for ( int i = 0; i < 4; i++ )
+        m_bCascadeUpdated[i] = full || i < 2 || ( m_uiFrame + i ) % interval == 0;
+    m_uiFrame++;
+}
+
+bool CShadowRenderer::AllCascadesUpdated() const
+{
+    for ( int i = 0; i < gShadowSettings.ShadowCascadeCount; i++ )
+        if ( !m_bCascadeUpdated[i] )
+            return false;
+    return true;
+}
+
+// Clears one cascade's region of the shadow atlas (the viewport set for it) to the far plane: a quad at depth 1 with the
+// depth test set to always pass. ClearDepthStencilView can only clear the whole atlas.
+void CShadowRenderer::ClearCascade( int cascade )
+{
+    g_pStateMgr->SetDepthEnable( true );
+    g_pStateMgr->SetZWriteEnable( true );
+    g_pStateMgr->SetDepthFunc( D3D11_COMPARISON_ALWAYS );
+    m_pDepthClearPS->Set();
+    CFullscreenQuad::Draw();
+    g_pStateMgr->SetDepthFunc( D3D11_COMPARISON_LESS_EQUAL );
+}
+
 void CShadowRenderer::RenderShadowToBuffer( int cascade, void( *render )( int cascade ) )
 {
+    // kept from an earlier frame: its depth, light matrix and fit stay as they were
+    if ( !m_bCascadeUpdated[cascade] )
+        return;
     CD3DRenderer* renderer = static_cast<CRwD3D1XEngine*>( g_pRwCustomEngine )->getRenderer();
     renderer->BeginDebugEvent( L"Shadow Buffer" );
 
@@ -185,11 +251,16 @@ void CShadowRenderer::RenderShadowToBuffer( int cascade, void( *render )( int ca
     vp.TopLeftX = (float)( gShadowSettings.Size * cascade );
     vp.TopLeftY = 0;
     g_pStateMgr->SetViewport( vp );
+    if ( !AllCascadesUpdated() )
+        ClearCascade( cascade );
 
     RwGraphicsMatrix* view = (RwGraphicsMatrix *)&RwD3D9D3D9ViewTransform;
     RwGraphicsMatrix* proj = (RwGraphicsMatrix *)&RwD3D9D3D9ProjTransform;
     g_pRenderBuffersMgr->Multipy4x4Matrices( (RwGraphicsMatrix *)&m_pLightCB->data.ViewProj[cascade], view, proj );
+    // Clamp instead of clip at the near plane: a tall building far towards a low sun lies in front of it and still casts.
+    g_pStateMgr->SetDepthClipEnable( false );
     render( cascade );
+    g_pStateMgr->SetDepthClipEnable( true );
     RwCameraEndUpdate( m_pShadowCamera );
     renderer->EndDebugEvent();
 }
@@ -219,19 +290,42 @@ void CShadowRenderer::CalculateShadowDistances( const RwReal fNear, const RwReal
     m_fShadowDistances[2] = fNear + farDist * gShadowSettings.DistanceCoefficients[1];
     m_fShadowDistances[3] = fNear + farDist * gShadowSettings.DistanceCoefficients[2];
     m_fShadowDistances[4] = farDist;
+
+    // Practical split scheme (Zhang et al., parallel-split shadow maps): blend logarithmic splits, which give every
+    // cascade the same texel density on screen, with uniform ones. Fixed fractions leave the last cascade covering most
+    // of the shadow distance at a much coarser texel size than the one before it.
+    const float lambda = gShadowSettings.GetFloat( "SplitLambda" );
+    if ( lambda > 0.0f )
+    {
+        const int   count     = gShadowSettings.ShadowCascadeCount;
+        const float splitNear = max( fNear, 0.1f );
+        // ShadowDistance is meant from the ground: seen from the air (a plane hundreds of metres up) the ground starts
+        // that far from the camera, and shadows measured from the camera would switch off as soon as you climb.
+        const float heightAboveGround = max( TheCamera.GetPosition().z - TheCamera.CalculateGroundHeight( 0 ), 0.0f );
+        const float splitFar  = max( min( gShadowSettings.GetFloat( "ShadowDistance" ) + heightAboveGround, farDist ), splitNear + 1.0f );
+        for ( int i = 1; i <= count; i++ )
+        {
+            const float t = static_cast<float>( i ) / count;
+            m_fShadowDistances[i] = lambda * splitNear * powf( splitFar / splitNear, t ) + ( 1.0f - lambda ) * ( splitNear + ( splitFar - splitNear ) * t );
+        }
+        for ( int i = count + 1; i < 5; i++ )
+            m_fShadowDistances[i] = splitFar;
+    }
     for ( int i = 0; i < 5; i++ )
         m_pLightCB->data.FadeDistances[i] = m_fShadowDistances[i];
 }
 
 void CShadowRenderer::QueueTextureReload()
 {
+    CRwD3D1XEngine* dxEngine = (CRwD3D1XEngine*)g_pRwCustomEngine;
     if ( m_bRequiresReloading )
     {
         m_pShadowCamera->zBuffer->width = gShadowSettings.Size * gShadowSettings.ShadowCascadeCount;
         m_pShadowCamera->zBuffer->height = gShadowSettings.Size;
-        CRwD3D1XEngine* dxEngine = (CRwD3D1XEngine*)g_pRwCustomEngine;
         dxEngine->m_pRastersToReload.push_back( m_pShadowCamera->zBuffer );
     }
+    if ( m_bRequiresReloading || dxEngine->m_bScreenSizeChanged )
+        m_bForceFullUpdate = true;
 }
 
 void CShadowRenderer::DrawDebug()

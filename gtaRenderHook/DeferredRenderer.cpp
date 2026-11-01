@@ -45,11 +45,16 @@ CDeferredRenderer::CDeferredRenderer()
     m_aDeferredRasters[3] =
         RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32,
                         rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
+    // Object motion vectors (RGBA16F): xy pixel displacement to previous frame, z = 1 where written by an object.
+    m_aDeferredRasters[4] =
+        RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32,
+                        rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
+    CTemporalAA::m_pObjectMotionRaster = m_aDeferredRasters[4];
     m_pReflectionRaster =
-        RwRasterCreate( (int)( RsGlobal.maximumWidth *
-                               gDeferredSettings.GetFloat( "SSRScale" ) ),
-                        (int)( RsGlobal.maximumHeight *
-                               gDeferredSettings.GetFloat( "SSRScale" ) ),
+        RwRasterCreate( max( 1, (int)( RsGlobal.maximumWidth *
+                                       gDeferredSettings.GetFloat( "SSRScale" ) ) ),
+                        max( 1, (int)( RsGlobal.maximumHeight *
+                                       gDeferredSettings.GetFloat( "SSRScale" ) ) ),
                         32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
     m_pLightingRaster =
         RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32,
@@ -91,7 +96,7 @@ CDeferredRenderer::CDeferredRenderer()
     gDeferredSettings.m_aShaderPointers.push_back( m_pFinalPassPS );
     gDeferredSettings.m_aShaderPointers.push_back( m_pAtmospherePassPS );
     gDeferredSettings.m_aShaderPointers.push_back( m_pReflectionPassPS );
-    for ( int i = 0; i < 4; i++ )
+    for ( int i = 0; i < kGBufferTargets; i++ )
     {
         gDebugSettings.DebugRenderTargetList.push_back( m_aDeferredRasters[i] );
     }
@@ -124,6 +129,8 @@ CDeferredRenderer::~CDeferredRenderer()
     RwRasterDestroy( m_pFinalRasters[1] );
     RwRasterDestroy( m_pFinalRasters[0] );
     RwRasterDestroy( m_pLightingRaster );
+    CTemporalAA::m_pObjectMotionRaster = nullptr;
+    RwRasterDestroy( m_aDeferredRasters[4] );
     RwRasterDestroy( m_aDeferredRasters[3] );
     RwRasterDestroy( m_aDeferredRasters[2] );
     RwRasterDestroy( m_aDeferredRasters[1] );
@@ -141,7 +148,7 @@ void CDeferredRenderer::RenderToGBuffer( void ( *renderCB )() )
 
     renderer->BeginDebugEvent( L"GBuffer pass" );
     g_pRwCustomEngine->SetRenderTargets( m_aDeferredRasters,
-                                         Scene.m_pRwCamera->zBuffer, 4 );
+                                         Scene.m_pRwCamera->zBuffer, kGBufferTargets );
     renderCB();
     g_pRwCustomEngine->SetRenderTargets( &Scene.m_pRwCamera->frameBuffer,
                                          Scene.m_pRwCamera->zBuffer, 1 );
@@ -161,6 +168,11 @@ void CDeferredRenderer::RenderOutput()
         gDeferredSettings.GetFloat( "MaxShadowBlur" );
     m_pDeferredBuffer->data.MinShadowBlur =
         gDeferredSettings.GetFloat( "MinShadowBlur" );
+    // Convert NDC jitter delta to UV space (uv = 0.5 + 0.5 * ndc.x, 0.5 - 0.5 * ndc.y).
+    m_pDeferredBuffer->data.SSRPrevFrameOffsetX =
+        0.5f * CTemporalAA::GetJitterDeltaX();
+    m_pDeferredBuffer->data.SSRPrevFrameOffsetY =
+        -0.5f * CTemporalAA::GetJitterDeltaY();
     m_pDeferredBuffer->Update();
     g_pStateMgr->SetConstantBufferPS( m_pDeferredBuffer, 6 );
     CAmbientOcclusion::RenderAO( m_aDeferredRasters[1] );
@@ -321,17 +333,17 @@ void CDeferredRenderer::QueueTextureReload()
     if ( m_bRequiresReloading || dxEngine->m_bScreenSizeChanged )
     {
         m_pReflectionRaster->width =
-            (int)( RsGlobal.maximumWidth *
-                   gDeferredSettings.GetFloat( "SSRScale" ) );
+            max( 1, (int)( RsGlobal.maximumWidth *
+                           gDeferredSettings.GetFloat( "SSRScale" ) ) );
         m_pReflectionRaster->height =
-            (int)( RsGlobal.maximumHeight *
-                   gDeferredSettings.GetFloat( "SSRScale" ) );
+            max( 1, (int)( RsGlobal.maximumHeight *
+                           gDeferredSettings.GetFloat( "SSRScale" ) ) );
         dxEngine->m_pRastersToReload.push_back( m_pReflectionRaster );
     }
 
     if ( dxEngine->m_bScreenSizeChanged )
     {
-        for ( int i = 0; i < 4; i++ )
+        for ( int i = 0; i < kGBufferTargets; i++ )
         {
             m_aDeferredRasters[i]->width  = RsGlobal.maximumWidth;
             m_aDeferredRasters[i]->height = RsGlobal.maximumHeight;

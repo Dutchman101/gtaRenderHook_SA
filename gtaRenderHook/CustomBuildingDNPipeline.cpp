@@ -15,6 +15,8 @@
 #include "Renderer.h"
 #include "RwD3D1XEngine.h"
 #include "RwRenderEngine.h"
+#include "PluginDrawCallback.h"
+#include "TemporalAA.h"
 #include "stdafx.h"
 #include <game_sa\CWeather.h>
 extern int      drawCallCount;
@@ -103,6 +105,20 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
 
     BOOL oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
 
+    // dithering needs RenderHook's TAA to average the pattern; under an external TAA (DLAA) use the dual pass
+    const bool  dithering = gDeferredSettings.GetToggleField( "UseDitheringForAlphaObjects" ) &&
+                           !CTemporalAA::ExternalTAAActive();
+    const bool  dualPassEnabled =
+        !dithering && gDeferredSettings.GetToggleField( "UseDualPassForAlphaObjects" );
+    const float alphaCutoff = gDeferredSettings.GetFloat( "AlphaObjectsCutoff" );
+    // Fading entities skip the forward alpha list in stage 1, so no soft-edge pass runs for them and mip coverage
+    // must compensate in the G-buffer just as when blended edges are disabled.
+    const bool  blendEdges  = gDeferredSettings.GetToggleField( "AlphaObjectsBlendEdges" ) &&
+                             !( m_uiDeferredStage == 1 && CRendererRH::FadingPass );
+    const float mipCoverage = blendEdges ? 0.0f : gDeferredSettings.GetFloat( "AlphaObjectsMipCoverage" );
+    RwMatrix *  ltm  = RwFrameGetLTM( static_cast<RwFrame *>( atomic->object.object.parent ) );
+    const int   pass = CurrentBuildingDrawPass();
+
     // set<RpMaterial*> materialSet{};
     // To improve preformance we try to reduce texture set calls, to do that we
     // need to sort every object by texture pointer.
@@ -116,6 +132,9 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
         RwUInt8 bAlphaEnable = 0;
         auto    mesh         = GetModelsData( entryData )[i];
         bAlphaEnable         = 0;
+        const unsigned int drawFlags = NotifyBuildingDraw( atomic, ltm, (int)i, pass, false );
+        const bool vertexAlpha =
+            mesh.vertexAlpha && !( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY );
         // if (mesh.material->color.alpha == 0) continue;
         if ( m_uiDeferredStage != 2 )
         {
@@ -123,6 +142,9 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
             if ( m_uiDeferredStage == 1 )
             {
                 color.alpha = max( color.alpha, 2 );
+                // fading entity: draw opaque so LOD cross-fades do not dither against empty background
+                if ( CRendererRH::FadingPass )
+                    color.alpha = 255;
             }
             if ( mesh.material->surfaceProps.ambient > 1.0 )
                 g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor( color );
@@ -135,7 +157,9 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
             g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
             g_pRenderBuffersMgr->UpdateMaterialGlossiness( fGlossiness );
         }
-        bAlphaEnable |= mesh.material->color.alpha != 255 || mesh.vertexAlpha;
+        const RwUInt8 effectiveAlpha =
+            ( m_uiDeferredStage == 1 && CRendererRH::FadingPass ) ? 255 : mesh.material->color.alpha;
+        bAlphaEnable |= effectiveAlpha != 255 || vertexAlpha;
 
         if ( mesh.material->texture && mesh.material->texture->raster )
         {
@@ -161,17 +185,26 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
         }
         else
             g_pRwCustomEngine->SetTexture( nullptr, 0 );
+        // Dual pass: the transparency comes from the texture alone (material alpha 255, no vertex alpha), so the
+        // solid texels can go to the G-buffer and only the soft edges need blending.
+        const bool dualPass = dualPassEnabled && bAlphaEnable > 0 &&
+                              effectiveAlpha == 255 && !vertexAlpha;
+        const bool gBufferPass = m_uiDeferredStage == 1 || m_uiDeferredStage == 2;
+        g_pRenderBuffersMgr->UpdateAlphaPass( dualPass && gBufferPass ? alphaCutoff : 0.0f, false,
+                                              dualPass && m_uiDeferredStage == 1 ? mipCoverage : 0.0f );
         if ( m_uiDeferredStage != 1 )
             g_pStateMgr->SetAlphaBlendEnable( bAlphaEnable > 0 );
         else
         {
-            if ( bAlphaEnable > 0 && !gDeferredSettings.GetToggleField("UseDitheringForAlphaObjects") )
-            { 
-                m_aAlphaMeshList.Push( {entryData,
-                                        RwFrameGetLTM( static_cast<RwFrame *>(
-                                            atomic->object.object.parent ) ),
-                                        (int)i} );
-                continue;
+            // Without blended edges a dual-pass mesh is drawn only into the G-buffer. A fading entity (LOD cross-fade)
+            // gets its fade through the material alpha, which the game restores right after drawing it: on the forward
+            // alpha list it would be drawn opaque under forward lighting instead of deferred, so draw it in G-buffer.
+            if ( bAlphaEnable > 0 && !dithering && !( dualPass && !blendEdges ) && !CRendererRH::FadingPass )
+            {
+                m_aAlphaMeshList.Push(
+                    {entryData, ltm, (int)i, dualPass ? ALPHA_MESH_DUAL_PASS : 0, atomic} );
+                if ( !dualPass )
+                    continue;
             }
             g_pStateMgr->SetAlphaBlendEnable( FALSE );
         }
@@ -189,6 +222,7 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
     if ( m_uiDeferredStage == 3 || m_uiDeferredStage == 4 )
         m_pVoxelGS->ReSet();
 
+    g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false );
     g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
 }
 
@@ -197,7 +231,8 @@ void CCustomBuildingDNPipeline::ResetAlphaList() { m_aAlphaMeshList.Clean(); }
 void CCustomBuildingDNPipeline::RenderAlphaList()
 {
     g_pStateMgr->SetAlphaBlendEnable( true );
-    m_aAlphaMeshList.ExecuteForEach( [this]( const AlphaMesh &mesh ) {
+    const float alphaCutoff = gDeferredSettings.GetFloat( "AlphaObjectsCutoff" );
+    m_aAlphaMeshList.ExecuteForEach( [this, alphaCutoff]( const AlphaMesh &mesh ) {
         UINT stride  = sizeof( SimpleVertex );
         UINT offset  = 0;
         auto curmesh = GetModelsData( mesh.entryptr )[mesh.meshID];
@@ -235,9 +270,13 @@ void CCustomBuildingDNPipeline::RenderAlphaList()
 
         g_pRwCustomEngine->SetTexture( curmesh.material->texture, 0 );
 
+        const bool dualPass = ( mesh.flags & ALPHA_MESH_DUAL_PASS ) != 0;
+        NotifyBuildingDraw( mesh.atomic, mesh.worldMatrix, mesh.meshID, RH_PASS_BLENDED, dualPass );
+        g_pRenderBuffersMgr->UpdateAlphaPass( dualPass ? alphaCutoff : 0.0f, dualPass );
         g_pRenderBuffersMgr->FlushMaterialBuffer();
         g_pStateMgr->FlushStates();
         GET_D3D_RENDERER->DrawIndexed( curmesh.numIndex, curmesh.startIndex,
                                        curmesh.minVert );
     } );
+    g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false );
 }

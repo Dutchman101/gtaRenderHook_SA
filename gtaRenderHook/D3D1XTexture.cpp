@@ -7,6 +7,7 @@
 #include "D3D1XShader.h"
 #include "CDebug.h"
 #include "D3DSpecificHelpers.h"
+#include "D3D1XEnumParser.h"
 
 CD3D1XTexture::CD3D1XTexture( RwRaster* pParent, bool mipMaps, bool hasPalette ) : m_pParent{ pParent }, m_hasPalette{ hasPalette }
 {
@@ -108,7 +109,7 @@ CD3D1XTexture::CD3D1XTexture( RwRaster* pParent, bool mipMaps, bool hasPalette )
         m_type = eD3D1XTextureType::TT_DepthStencil;
         {
 
-            desc.Format = d3dRaster->format == DXGI_FORMAT_D32_FLOAT ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_R24G8_TYPELESS;
+            desc.Format = CD3D1XEnumParser::ConvertToTextureBufferSupportedFormat( d3dRaster->format );
             desc.MipLevels = 1;
             desc.SampleDesc.Quality = 0;
             desc.SampleDesc.Count = 1;
@@ -133,7 +134,7 @@ CD3D1XTexture::CD3D1XTexture( RwRaster* pParent, bool mipMaps, bool hasPalette )
             g_pDebug->SetD3DName( m_depthStencilRV, "CD3D1XTexture::DepthStencilRV" );
 
             D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-            SRVDesc.Format = d3dRaster->format == DXGI_FORMAT_D32_FLOAT ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            SRVDesc.Format = CD3D1XEnumParser::ConvertToSRVSupportedFormat( d3dRaster->format );
             SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             SRVDesc.Texture2D.MipLevels = UINT32_MAX;
 
@@ -362,6 +363,7 @@ void CD3D1XTexture::Resize( UINT newWidth, UINT newHeight )
     }
     m_pTexture = nullptr;
     m_shaderRV = nullptr;
+    m_depthStencilRV = nullptr;
     m_pStagingTexture = nullptr;
     switch ( m_type )
     {
@@ -373,7 +375,7 @@ void CD3D1XTexture::Resize( UINT newWidth, UINT newHeight )
         break;
     case eD3D1XTextureType::TT_DepthStencil:
     {
-        desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+        desc.Format = CD3D1XEnumParser::ConvertToTextureBufferSupportedFormat( d3dRaster->format );
         desc.MipLevels = 1;
         desc.SampleDesc.Quality = 0;
         desc.SampleDesc.Count = 1;
@@ -389,7 +391,7 @@ void CD3D1XTexture::Resize( UINT newWidth, UINT newHeight )
         g_pDebug->SetD3DName( m_pTexture, "CD3D1XTexture::DSTexture" );
 
         D3D11_DEPTH_STENCIL_VIEW_DESC descDSV{};
-        descDSV.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        descDSV.Format = d3dRaster->format;
         descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
         descDSV.Texture2D.MipSlice = 0;
         if ( !CALL_D3D_API( dev->CreateDepthStencilView( m_pTexture, &descDSV, &m_depthStencilRV ), "Failed to create depth stencil view" ) )
@@ -397,7 +399,7 @@ void CD3D1XTexture::Resize( UINT newWidth, UINT newHeight )
         g_pDebug->SetD3DName( m_depthStencilRV, "CD3D1XTexture::DepthStencilRV" );
 
         D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        SRVDesc.Format = CD3D1XEnumParser::ConvertToSRVSupportedFormat( d3dRaster->format );
         SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         SRVDesc.Texture2D.MipLevels = UINT32_MAX;
 
@@ -440,6 +442,7 @@ void CD3D1XTexture::Reload()
     }
     m_pTexture = nullptr;
     m_shaderRV = nullptr;
+    m_depthStencilRV = nullptr;
     m_pStagingTexture = nullptr;
     switch ( m_type )
     {
@@ -451,7 +454,7 @@ void CD3D1XTexture::Reload()
         break;
     case eD3D1XTextureType::TT_DepthStencil:
     {
-        desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+        desc.Format = CD3D1XEnumParser::ConvertToTextureBufferSupportedFormat( d3dRaster->format );
         desc.MipLevels = 1;
         desc.SampleDesc.Quality = 0;
         desc.SampleDesc.Count = 1;
@@ -469,7 +472,7 @@ void CD3D1XTexture::Reload()
         g_pDebug->SetD3DName( m_pTexture, "CD3D1XTexture::DSTexture" );
 
         D3D11_DEPTH_STENCIL_VIEW_DESC descDSV{};
-        descDSV.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        descDSV.Format = d3dRaster->format;
         descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
         descDSV.Texture2D.MipSlice = 0;
         if ( !CALL_D3D_API( dev->CreateDepthStencilView( m_pTexture, &descDSV, &m_depthStencilRV ), "Failed to create depth stencil view" ) )
@@ -477,7 +480,7 @@ void CD3D1XTexture::Reload()
         g_pDebug->SetD3DName( m_depthStencilRV, "CD3D1XTexture::DepthStencilRV" );
 
         D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc{};
-        SRVDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        SRVDesc.Format = CD3D1XEnumParser::ConvertToSRVSupportedFormat( d3dRaster->format );
         SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         SRVDesc.Texture2D.MipLevels = UINT32_MAX;
 

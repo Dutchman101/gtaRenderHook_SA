@@ -1,5 +1,6 @@
 #pragma once
 #include "D3D1XConstantBuffer.h"
+#include <unordered_map>
 /*!
     Matrix buffer structure, represents common transformation matrices used for rendering.
 */
@@ -10,11 +11,16 @@ struct PerFrameMatrixBuffer
     RwMatrix mViewProjection;
     RwMatrix mInvView;
     RwMatrix mInvViewProj;
+    // Object motion state for the main camera: unjittered previous view-projection, current NDC jitter (xy),
+    // z = 1 when motion is valid, w = 1 when an external TAA handled the previous frame (disabling dither patterns).
+    RwMatrix mPrevViewProj;
+    float    vMotionJitter[4];
 };
 struct PerObjectMatrixBuffer
 {
     RwMatrix mWorld;
     RwMatrix mWorldInv;
+    RwMatrix mWorldPrev;
 };
 /*!
 
@@ -26,9 +32,12 @@ struct MaterialBuffer
     float		specularIntensity;
     float		glossiness;
     float		metallness;
-    float       padd__[2];
+    float       alphaCutoff; // dual-pass alpha test cutoff (0 = disabled)
+    float       alphaBlendPass; // 1 during the soft-edge blended pass of a dual-pass mesh
     int         hasNormalTex;
     int			hasSpecTex;
+    float       alphaMipCoverage; // per-mip alpha boost when dual-pass soft edges are disabled
+    float       padd__[3];
 };
 struct RwGraphicsMatrix;
 class CD3DRenderer;
@@ -57,6 +66,18 @@ public:
         Updates current view matrix
     */
     void UpdateViewMatrix( RwMatrix &view );
+    /*!
+        Configures per-frame camera motion inputs (unjittered previous view-projection and current NDC jitter).
+    */
+    void SetMotionCamera( const RwMatrix &prevViewProj, float jitterX, float jitterY, bool externalTAA );
+    /*!
+        Advances the rendered frame counter for per-object world matrix history.
+    */
+    void NextFrame();
+    /*!
+        Returns the current rendered frame counter.
+    */
+    unsigned int GetFrame() const { return m_nFrame; }
     /*!
         Updates current world matrix
     */
@@ -113,6 +134,10 @@ public:
     */
     void UpdateHasNormalTex( const int &hastex );
     /*!
+        Updates dual-pass alpha cutout, soft-edge blend pass flag, and per-mip coverage boost.
+    */
+    void UpdateAlphaPass( float cutoff, bool blendPass, float mipCoverage = 0.0f );
+    /*!
         Flushes all material buffer changes if there was any
     */
     void FlushMaterialBuffer();
@@ -125,5 +150,14 @@ private:
     RwMatrix *		m_pOldWorldMatrix = nullptr;
     // world matrix as last uploaded, see SetMatrixBuffer
     RwMatrix		m_mUploadedWorld{};
+    RwMatrix		m_mUploadedWorldPrev{};
+    struct WorldHistory
+    {
+        RwMatrix current;
+        RwMatrix previous;
+        unsigned int frame;
+    };
+    std::unordered_map<RwMatrix *, WorldHistory> m_worldHistory;
+    unsigned int m_nFrame = 2; // start at 2 so default-initialized frame 0 is never treated as the previous frame
 };
 extern CD3D1XRenderBuffersManager* g_pRenderBuffersMgr;

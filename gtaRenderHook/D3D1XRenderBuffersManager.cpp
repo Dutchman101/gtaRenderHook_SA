@@ -44,7 +44,35 @@ void CD3D1XRenderBuffersManager::UpdateViewProjMatricles( RwMatrix &view,
     Inverse4x4Matrix(
         (RwGraphicsMatrix *)&m_pPerFrameMatrixBuffer->data.mInvViewProj,
         (RwGraphicsMatrix *)&m_pPerFrameMatrixBuffer->data.mViewProjection );
+    // Auxiliary cameras default to zero object motion unless SetMotionCamera overrides this frame.
+    m_pPerFrameMatrixBuffer->data.mPrevViewProj = m_pPerFrameMatrixBuffer->data.mViewProjection;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[0] = 0.0f;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[1] = 0.0f;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[2] = 0.0f;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[3] = 0.0f;
     m_pPerFrameMatrixBuffer->Update();
+}
+
+void CD3D1XRenderBuffersManager::SetMotionCamera( const RwMatrix &prevViewProj, float jitterX, float jitterY,
+                                                  bool externalTAA )
+{
+    m_pPerFrameMatrixBuffer->data.mPrevViewProj    = prevViewProj;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[0] = jitterX;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[1] = jitterY;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[2] = 1.0f;
+    m_pPerFrameMatrixBuffer->data.vMotionJitter[3] = externalTAA ? 1.0f : 0.0f;
+    m_pPerFrameMatrixBuffer->Update();
+}
+
+void CD3D1XRenderBuffersManager::NextFrame()
+{
+    m_nFrame++;
+    // Periodically evict stale frame pointers from streamed-out or destroyed entities.
+    if ( ( m_nFrame & 255 ) == 0 )
+    {
+        for ( auto it = m_worldHistory.begin(); it != m_worldHistory.end(); )
+            it = m_nFrame - it->second.frame > 2 ? m_worldHistory.erase( it ) : std::next( it );
+    }
 }
 
 void CD3D1XRenderBuffersManager::UpdateViewMatrix( RwMatrix &view )
@@ -61,6 +89,16 @@ void CD3D1XRenderBuffersManager::UpdateViewMatrix( RwMatrix &view )
 
 void CD3D1XRenderBuffersManager::UpdateWorldMatrix( RwMatrix *ltm )
 {
+    static RwMatrix s_identity = [] {
+        RwMatrix m{};
+        m.right.x = 1.0f;
+        m.up.y    = 1.0f;
+        m.at.z    = 1.0f;
+        m.pad3    = 0x3F800000;
+        return m;
+    }();
+    if ( ltm == nullptr )
+        ltm = &s_identity;
     m_pCurrentWorldMatrix                         = ltm;
     m_pPerObjectMatrixBuffer->data.mWorld.right.x = ltm->right.x;
     m_pPerObjectMatrixBuffer->data.mWorld.right.y = ltm->right.y;
@@ -80,6 +118,31 @@ void CD3D1XRenderBuffersManager::UpdateWorldMatrix( RwMatrix *ltm )
     m_pPerObjectMatrixBuffer->data.mWorld.pad3    = 0x3F800000;
     RwMatrixInvert( &m_pPerObjectMatrixBuffer->data.mWorldInv,
                     &m_pPerObjectMatrixBuffer->data.mWorld );
+
+    if ( ltm == &s_identity )
+    {
+        m_pPerObjectMatrixBuffer->data.mWorldPrev = m_pPerObjectMatrixBuffer->data.mWorld;
+        return;
+    }
+    // Track the LTM from the prior rendered frame; newly seen or teleported frames (> 50 m) default to zero motion.
+    auto &history = m_worldHistory[ltm];
+    if ( history.frame != m_nFrame )
+    {
+        const bool  continuous = history.frame + 1 == m_nFrame;
+        const auto &world      = m_pPerObjectMatrixBuffer->data.mWorld;
+        const float dx = world.pos.x - history.current.pos.x, dy = world.pos.y - history.current.pos.y,
+                    dz = world.pos.z - history.current.pos.z;
+        history.previous = continuous && dx * dx + dy * dy + dz * dz < 50.0f * 50.0f ? history.current : world;
+        history.current  = world;
+        history.frame    = m_nFrame;
+    }
+    else if ( memcmp( &history.current, &m_pPerObjectMatrixBuffer->data.mWorld, sizeof( RwMatrix ) ) != 0 )
+    {
+        // Reused LTM mutated multiple times in one frame (such as instanced grass) has no per-instance history.
+        m_pPerObjectMatrixBuffer->data.mWorldPrev = m_pPerObjectMatrixBuffer->data.mWorld;
+        return;
+    }
+    m_pPerObjectMatrixBuffer->data.mWorldPrev = history.previous;
 }
 
 void CD3D1XRenderBuffersManager::Multipy4x4Matrices( RwGraphicsMatrix *res,
@@ -251,11 +314,13 @@ void CD3D1XRenderBuffersManager::SetMatrixBuffer()
     // The pointer alone is not enough: the same frame can be moved between draws (the grass renderer moves one
     // atomic's frame for every plant), so the matrix itself is compared too.
     if ( m_pCurrentWorldMatrix != m_pOldWorldMatrix ||
-         memcmp( &m_mUploadedWorld, &m_pPerObjectMatrixBuffer->data.mWorld, sizeof( RwMatrix ) ) != 0 )
+         memcmp( &m_mUploadedWorld, &m_pPerObjectMatrixBuffer->data.mWorld, sizeof( RwMatrix ) ) != 0 ||
+         memcmp( &m_mUploadedWorldPrev, &m_pPerObjectMatrixBuffer->data.mWorldPrev, sizeof( RwMatrix ) ) != 0 )
     {
         m_pPerObjectMatrixBuffer->Update();
-        m_pOldWorldMatrix = m_pCurrentWorldMatrix;
-        m_mUploadedWorld  = m_pPerObjectMatrixBuffer->data.mWorld;
+        m_pOldWorldMatrix    = m_pCurrentWorldMatrix;
+        m_mUploadedWorld     = m_pPerObjectMatrixBuffer->data.mWorld;
+        m_mUploadedWorldPrev = m_pPerObjectMatrixBuffer->data.mWorldPrev;
     }
 }
 
@@ -341,6 +406,20 @@ void CD3D1XRenderBuffersManager::UpdateHasNormalTex( const int &hastex )
     {
         m_pPerMaterialBuffer->data.hasNormalTex = hastex;
         m_bMaterialBufferRequiresUpdate         = true;
+    }
+}
+
+void CD3D1XRenderBuffersManager::UpdateAlphaPass( float cutoff, bool blendPass, float mipCoverage )
+{
+    const float blend = blendPass ? 1.0f : 0.0f;
+    if ( m_pPerMaterialBuffer->data.alphaCutoff != cutoff ||
+         m_pPerMaterialBuffer->data.alphaBlendPass != blend ||
+         m_pPerMaterialBuffer->data.alphaMipCoverage != mipCoverage )
+    {
+        m_pPerMaterialBuffer->data.alphaCutoff      = cutoff;
+        m_pPerMaterialBuffer->data.alphaBlendPass   = blend;
+        m_pPerMaterialBuffer->data.alphaMipCoverage = mipCoverage;
+        m_bMaterialBufferRequiresUpdate             = true;
     }
 }
 

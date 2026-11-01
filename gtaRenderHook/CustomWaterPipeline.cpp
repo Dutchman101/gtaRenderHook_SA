@@ -70,14 +70,11 @@ CCustomWaterPipeline::~CCustomWaterPipeline()
 
 void CCustomWaterPipeline::RenderWater( RwIm3DVertex * verticles, UINT vertexCount, USHORT * indices, UINT indexCount )
 {
+    if ( verticles == nullptr || vertexCount == 0 || indices == nullptr || indexCount == 0 )
+        return;
     m_pWaterRaster = ( *(RwRaster**)0xC228A8 );
     m_pWaterWakeRaster = ( *(RwRaster**)0xC228B8 );
-    RwMatrix identity{};
-    identity.right.x = 1.0f;
-    identity.up.y = 1.0f;
-    identity.at.z = 1.0f;
-    identity.pad3 = 0x3F800000;
-    g_pRenderBuffersMgr->UpdateWorldMatrix( &identity );
+    g_pRenderBuffersMgr->UpdateWorldMatrix( nullptr );
     auto devContext = GET_D3D_CONTEXT;
     g_pRenderBuffersMgr->SetMatrixBuffer();
     {

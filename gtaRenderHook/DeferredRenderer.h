@@ -14,6 +14,10 @@ struct CBDeferredRendering
     float SSRStep;
     float MaxShadowBlur;
     float MinShadowBlur;
+    // UV shift from current jitter to previous-frame jitter because SSR samples previous-frame color.
+    float SSRPrevFrameOffsetX;
+    float SSRPrevFrameOffsetY;
+    float __pad[2];
 };
 class CDeferredRenderer
 {
@@ -33,7 +37,9 @@ public:
     CHDRTonemapping* m_pTonemapping;
     bool	m_bRequiresReloading = false;
 private:
-    RwRaster*	m_aDeferredRasters[4];
+    // 0: albedo, 1: normals and depth, 2: material params, 3: vertex radiance, 4: object motion vectors.
+    static const int kGBufferTargets = 5;
+    RwRaster*	m_aDeferredRasters[kGBufferTargets];
     RwRaster*	m_pLightingRaster;
     RwRaster*	m_pFinalRasters[4];
     RwRaster*	m_pReflectionRaster;
@@ -63,6 +69,16 @@ public:
             "BlurShadows", false, false, true, m_sName, true );
         m_aFields["UseDitheringForAlphaObjects"] = new ToggleSField(
             "UseDitheringForAlphaObjects", false, false, false, m_sName, false );
+        // Cutout meshes with opaque material alpha (foliage, fences): texels at or above AlphaObjectsCutoff
+        // write to the G-buffer for deferred lighting and shadows while remaining soft edges blend afterward.
+        m_aFields["UseDualPassForAlphaObjects"] = new ToggleSField(
+            "UseDualPassForAlphaObjects", false, false, false, m_sName, false );
+        m_aFields["AlphaObjectsCutoff"] = new FloatSField( "AlphaObjectsCutoff", false, false, false, m_sName, 0.5f, 0.05f, 0.99f, 0.05f );
+        // Disabling blended edges restricts dual-pass meshes to G-buffer cutout so external temporal AA avoids
+        // brightness speckle between deferred and forward pixels; AlphaObjectsMipCoverage compensates distant mip thinning.
+        m_aFields["AlphaObjectsBlendEdges"] = new ToggleSField(
+            "AlphaObjectsBlendEdges", false, false, false, m_sName, true );
+        m_aFields["AlphaObjectsMipCoverage"] = new FloatSField( "AlphaObjectsMipCoverage", false, false, false, m_sName, 0.25f, 0.0f, 1.0f, 0.05f );
         m_aFields["UsePCSS"] = new ToggleSField( "UsePCSS", false, false, true, m_sName, true );
         m_aFields["SampleShadows"] = new ToggleSField( "SampleShadows", false, false, true, m_sName, true );
         m_aFields["UseSSR"] = new ToggleSField( "UseSSR", false, false, true, m_sName, true );

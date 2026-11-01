@@ -107,6 +107,7 @@ void CSAIdleHook::Idle( void *Data )
     if ( dxEngine->m_bScreenSizeChanged || g_pDeferredRenderer->m_pShadowRenderer->m_bRequiresReloading ||
          g_pDeferredRenderer->m_bRequiresReloading ||
          CVolumetricLighting::m_bRequiresReloading ||
+         CAmbientOcclusion::m_bRequiresReloading ||
          CCloudRendering::m_bRequiresReloading )
     {
         dxEngine->ReloadTextures();
@@ -179,6 +180,8 @@ void CSAIdleHook::RenderInGame()
     CPerfTimer scanTimer( "Renderlist construction time" );
     CPerfTimer gameTimer( "Game Time" );
 
+    // previous world matrices for object motion vectors are per rendered frame
+    g_pRenderBuffersMgr->NextFrame();
     PrepareRenderStuff();
 
     DefinedState();
@@ -223,6 +226,7 @@ void CSAIdleHook::RenderInGame()
     // First forward pass(clouds, sky etc.)
     RenderForwardBeforeDeferred();
 
+    g_pDeferredRenderer->m_pShadowRenderer->m_bShadowHistoryValid = g_pDeferredRenderer->m_pShadowRenderer->m_bShadowsRendered;
     g_pDeferredRenderer->m_pShadowRenderer->m_bShadowsRendered = false;
     if ( !CGame::currArea && ( m_fShadowDNBalance < 1.0 ) )
         PrepareRealTimeShadows( sunDirs[curr_sun_dir] );
@@ -240,8 +244,9 @@ void CSAIdleHook::RenderInGame()
     CRendererRH::ConstructRenderList();
     scanTimer.Stop();
 
+    // The game's PreRender already runs PreRender for every visible entity, LOD, and off-screen entity with effects;
+    // skip CRendererRH::PreRender so entities and point lights are not pre-rendered twice per frame.
     CRenderer::PreRender();
-    CRendererRH::PreRender();
     CWorld::ProcessPedsAfterPreRender();
 
     RwCameraEndUpdate( Scene.m_pRwCamera );
@@ -385,9 +390,13 @@ void CSAIdleHook::RenderDeferred()
     //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATECULLMODE, rwCULLMODECULLBACK);
     CRendererRH::RenderRoads();
     CRendererRH::RenderEverythingBarRoads();
+    CRendererRH::FadingPass = true;
     CVisibilityPlugins::RenderFadingUnderwaterEntities();
+    CRendererRH::FadingPass = false;
     BreakManager_c__Render( g_breakMan, 0 );
+    CRendererRH::FadingPass = true;
     CVisibilityPlugins::RenderFadingEntities();
+    CRendererRH::FadingPass = false;
     BreakManager_c__Render( g_breakMan, 1 );
     // CRenderer::RenderFadingInUnderwaterEntities
     CVisibilityPluginsRH::RenderWeaponPedsNoMuzzleFlash();
@@ -452,9 +461,11 @@ void CSAIdleHook::PrepareRealTimeShadows( const RwV3d &sundir )
     auto shadowRenderer = g_pDeferredRenderer->m_pShadowRenderer;
 
     shadowRenderer->CalculateShadowDistances( Scene.m_pRwCamera->nearPlane, Scene.m_pRwCamera->farPlane );
+    shadowRenderer->SelectCascadesToUpdate( sundir );
     // Render cascades
     for ( int i = 0; i < gShadowSettings.ShadowCascadeCount; i++ )
-        shadowRenderer->DirectionalLightTransform( Scene.m_pRwCamera, sundir, i );
+        if ( shadowRenderer->IsCascadeUpdated( i ) )
+            shadowRenderer->DirectionalLightTransform( Scene.m_pRwCamera, sundir, i );
 
     g_pDebug->printMsg( "Shadow PrePass: end", 1 );
 }
@@ -464,7 +475,9 @@ void CSAIdleHook::RenderRealTimeShadows( const RwV3d &sundir )
 
     auto shadowRenderer = g_pDeferredRenderer->m_pShadowRenderer;
     m_uiDeferredStage = 2;
-    RwCameraClear( shadowRenderer->m_pShadowCamera, gColourTop, rwCAMERACLEARZ );
+    // with some cascades kept from earlier frames, each re-rendered cascade clears its own region instead
+    if ( shadowRenderer->AllCascadesUpdated() )
+        RwCameraClear( shadowRenderer->m_pShadowCamera, gColourTop, rwCAMERACLEARZ );
 
     // Render cascades
     for ( int i = 0; i < gShadowSettings.ShadowCascadeCount; i++ )

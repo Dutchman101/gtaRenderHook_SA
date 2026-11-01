@@ -66,12 +66,9 @@ CCustomSeabedPipeline::~CCustomSeabedPipeline()
 
 void CCustomSeabedPipeline::RenderSeabed( RwIm3DVertex * verticles, UINT vertexCount, USHORT * indices, UINT indexCount )
 {
-    RwMatrix identity{};
-    identity.right.x = 1.0f;
-    identity.up.y = 1.0f;
-    identity.at.z = 1.0f;
-    identity.pad3 = 0x3F800000;
-    g_pRenderBuffersMgr->UpdateWorldMatrix( &identity );
+    if ( verticles == nullptr || vertexCount == 0 || indices == nullptr || indexCount == 0 )
+        return;
+    g_pRenderBuffersMgr->UpdateWorldMatrix( nullptr );
     auto devContext = GET_D3D_CONTEXT;
     g_pRenderBuffersMgr->SetMatrixBuffer();
     {

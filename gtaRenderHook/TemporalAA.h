@@ -23,6 +23,13 @@ public:
     static void Render( RwRaster *input, RwRaster *output, RwRaster *gBuff1,
                         RwRaster *gBuff2 );
     static void QueueTextureReload();
+    // G-buffer target with object motion vectors (CDeferredRenderer), passed on to an external TAA handler
+    static RwRaster *m_pObjectMotionRaster;
+    // an external TAA (e.g. DLAA) replaced RenderHook's last frame: dithered transparency stays visible then
+    static bool ExternalTAAActive();
+    // NDC offset from this frame's jitter to the previous frame's (SSR samples the previous frame)
+    static float GetJitterDeltaX() { return m_fPrevJitterX - m_fJitterX; }
+    static float GetJitterDeltaY() { return m_fPrevJitterY - m_fJitterY; }
 
   private:
     static CD3D1XShader * m_pTemporalAA;
@@ -33,6 +40,9 @@ public:
     static RwV3d m_vPrevCamPos;
     static RwGraphicsMatrix m_mPrevView;
     static CD3D1XConstantBuffer<CBTemporalAA>* m_pTAABuffer;
+    // this frame's projection offset (NDC), view and unjittered projection, for an external TAA handler
+    static float m_fJitterX, m_fJitterY, m_fPrevJitterX, m_fPrevJitterY;
+    static RwGraphicsMatrix m_mView, m_mProjection;
 };
 
 /*!

@@ -26,7 +26,8 @@ cbuffer RenderStateBuffer : register( b0 )
     float   fFogRange;
     float   fFarClip;
     float   fTimeStep;
-    float3 __pad;           // padding to align structure to 16 bytes, unaligned structures are way slower
+    float   fReversedZ;     // 1 while the bound depth buffer uses reversed Z (near = 1, far = 0)
+    float2 __pad;           // padding to align structure to 16 bytes, unaligned structures are way slower
 }
 /*!
     Matrices updated each frame
@@ -38,6 +39,10 @@ cbuffer PerFrameMatrixBuffer : register(b1)
     row_major matrix mViewProjection;
     row_major matrix mViewInv;
     row_major matrix mViewProjectionInv;
+    // object motion vectors: last frame's view-projection without jitter, this frame's jitter (xy, NDC),
+    // z = 1 for the main camera (motion valid)
+    row_major matrix mPrevViewProjection;
+    float4 vMotionJitter;
 }
 /*!
     Matrices updated for each object
@@ -46,6 +51,7 @@ cbuffer PerObjectBuffer : register(b2)
 {
     row_major matrix mWorld;
     row_major matrix mWorldInv;
+    row_major matrix mWorldPrev; // world matrix of this object in the previous frame
 }
 /*!
     Matrices updated for each material
@@ -57,9 +63,11 @@ cbuffer PerMaterialBuffer : register(b3)
     float fSpecularIntensity : packoffset(c1.y);
     float fGlossiness : packoffset(c1.z);
     float fMetallness : packoffset(c1.w);
-    float2 ___padding : packoffset( c2 );
+    float  fAlphaCutoff : packoffset( c2.x );    // dual-pass alpha objects: alpha test value, 0 = off
+    float  fAlphaBlendPass : packoffset( c2.y ); // 1 in the blended pass of a dual-pass mesh
     int    bHasNormalTex : packoffset( c2.z );
     int    bHasSpecTex : packoffset( c2.w );
+    float  fAlphaMipCoverage : packoffset( c3.x ); // dual pass without blended edges: alpha boost per mip level
 }
 
 cbuffer VoxelViewMatrices : register(b4)
@@ -81,6 +89,8 @@ cbuffer DeferredRendering : register(b6)
     float fSSRStep;
     float fMaxShadowBlur;
     float fMinShadowBlur;
+    float2 vSSRPrevFrameOffset; // uv offset from this frame's jitter to the previous frame's
+    float2 __padSSR;
 }
 cbuffer VolumetricLighting : register(b7)
 {
@@ -94,7 +104,9 @@ cbuffer AmbientOcclusion : register(b8)
     float AOIntensity;
     float AORadius;
     float AOCurve;
-    float padding__;
+    float AOFrame;          // sample pattern frame index, 0 = stable pattern
+    float2 AOTexelSize;     // 1 / size of the AO target
+    float2 AODenoiseDir;    // AODenoisePS blur direction, in texels
 }
 cbuffer TemporalAA : register(b9)
 {

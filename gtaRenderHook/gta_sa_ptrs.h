@@ -262,12 +262,18 @@ struct SimpleVertexSkin
     UINT            indices;
 };
 
+enum AlphaMeshFlags
+{
+    ALPHA_MESH_DUAL_PASS = 1 // opaque cutout already drawn to G-buffer; draw soft edges only
+};
+
 struct AlphaMesh
 {
     RxInstanceData *entryptr;
     RwMatrix *      worldMatrix;
     int             meshID;
-    int             __padding;
+    int             flags = 0;
+    void *          atomic = nullptr;
 };
 
 #ifdef RENDER_VK_ENGINE

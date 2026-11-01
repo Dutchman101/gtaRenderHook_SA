@@ -22,6 +22,8 @@
 #include "D3D1XStateManager.h"
 #include "SAIdleHook.h"
 #include "DebugBBox.h"
+#include <algorithm>
+#include <unordered_set>
 bool		&CRendererRH::ms_bRenderTunnels = *(bool*)0xB745C0;
 bool		&CRendererRH::ms_bRenderOutsideTunnels = *(bool*)0xB745C1;
 bool&		CRendererRH::ms_bInTheSky = *(bool*)0xB76851;
@@ -45,9 +47,11 @@ float&				CRendererRH::ms_fCameraHeading = *(float*)0xB7684C;
 float&				CRendererRH::ms_lowLodDistScale = *(float*)0x8CD804;
 float&				CRendererRH::ms_fFarClipPlane = *(float*)0xB76848;
 bool CRendererRH::TOBJpass = false;
+bool CRendererRH::FadingPass = false;
 std::list<CEntity*> CRendererRH::ms_aVisibleEntities{};
 std::list<CEntity*> CRendererRH::ms_aVisibleLods{};
 std::vector<CEntity*> CRendererRH::ms_aVisibleShadowCasters[4] = { {}, {},{},{} };
+std::vector<CEntity*> CRendererRH::ms_aActiveShadowCasters{};
 std::vector<CEntity*> CRendererRH::ms_aVisibleReflectionObjects{};
 
 //9654B0     ; CStreaming::ms_disableStreaming
@@ -229,10 +233,30 @@ void CRendererRH::AddEntityToReflectionList( CEntity * entity, float renderDista
         ms_aVisibleReflectionObjects.push_back( entity->m_pLod );
 }
 
+static bool CanEntityCastShadow( CEntity *entity )
+{
+    if ( entity->m_pRwObject != nullptr )
+        return true;
+    if ( entity->m_nType != eEntityType::ENTITY_TYPE_BUILDING )
+        return false;
+    CBaseModelInfo *modelInfo = CModelInfo::ms_modelInfoPtrs[entity->m_nModelIndex];
+    return modelInfo != nullptr && modelInfo->m_pRwObject != nullptr;
+}
+
 char CRendererRH::AddEntityToShadowCasterList( CEntity * entity, float renderDistance, int shadowCascade )
 {
     //if (ms_aVisibleShadowCasters[shadowCascade].size() > 1000)
     //	return true;
+    // Off screen the game deletes a building's instance; a caster without one isn't drawn, so recreate it while the
+    // model is loaded (buildings only: peds and vehicles manage their own).
+    if ( entity->m_pRwObject == nullptr )
+    {
+        if ( !CanEntityCastShadow( entity ) )
+            return false;
+        entity->CreateRwObject();
+        if ( entity->m_pRwObject == nullptr )
+            return false;
+    }
     ms_aVisibleShadowCasters[shadowCascade].push_back( entity );
     return true;
 }
@@ -267,27 +291,32 @@ void CRendererRH::AddEntityToShadowCastersIfNeeded( CEntity * entity, bool check
         //	shadowEntity = shadowEntity->m_pLod;
         if ( modelInfo->m_nAlpha == 0 && shadowEntity->m_pLod != nullptr )
             shadowEntity = shadowEntity->m_pLod;
+        CBaseModelInfo *shadowModelInfo = CModelInfo::ms_modelInfoPtrs[shadowEntity->m_nModelIndex];
+        if ( shadowModelInfo == nullptr )
+            return;
+        CEntity *bboxEntity = shadowModelInfo->m_pColModel != nullptr ? shadowEntity : entity;
+        CBaseModelInfo *bboxModelInfo = shadowModelInfo->m_pColModel != nullptr ? shadowModelInfo : modelInfo;
         //if (shadowEntity->m_pRwObject == nullptr)
         //	shadowEntity->CreateRwObject();
-        auto entityPos = shadowEntity->GetPosition().ToRwV3d();
-        auto clump        = reinterpret_cast<RpClump*> (modelInfo->m_pRwObject);
-        auto entityRadius = modelInfo->m_pColModel->m_boundSphere.m_fRadius;
+        auto entityPos = bboxEntity->GetPosition().ToRwV3d();
+        auto clump        = reinterpret_cast<RpClump*> (shadowModelInfo->m_pRwObject);
+        auto entityRadius = bboxModelInfo->m_pColModel->m_boundSphere.m_fRadius;
 
         // World-space box around the entity's collision box, rotated with the entity: shifting the model-space box by
         // the position alone leaves a rotated object (a fence running along X instead of Y) outside its own box, so
         // it gets culled from cascades it should cast into.
-        const CVector bmin = modelInfo->m_pColModel->m_boundBox.m_vecMin;
-        const CVector bmax = modelInfo->m_pColModel->m_boundBox.m_vecMax;
+        const CVector bmin = bboxModelInfo->m_pColModel->m_boundBox.m_vecMin;
+        const CVector bmax = bboxModelInfo->m_pColModel->m_boundBox.m_vecMax;
         CVector axisX, axisY, axisZ;
-        if ( shadowEntity->m_matrix != nullptr )
+        if ( bboxEntity->m_matrix != nullptr )
         {
-            axisX = shadowEntity->m_matrix->right;
-            axisY = shadowEntity->m_matrix->up;
-            axisZ = shadowEntity->m_matrix->at;
+            axisX = bboxEntity->m_matrix->right;
+            axisY = bboxEntity->m_matrix->up;
+            axisZ = bboxEntity->m_matrix->at;
         }
         else
         {
-            const float heading = shadowEntity->m_placement.m_fHeading;
+            const float heading = bboxEntity->m_placement.m_fHeading;
             axisX = CVector( cosf( heading ), sinf( heading ), 0.0f );
             axisY = CVector( -sinf( heading ), cosf( heading ), 0.0f );
             axisZ = CVector( 0.0f, 0.0f, 1.0f );
@@ -311,18 +340,32 @@ void CRendererRH::AddEntityToShadowCastersIfNeeded( CEntity * entity, bool check
             for ( auto i = 0; i < gShadowSettings.ShadowCascadeCount; i++ )
                 isInsideLightBBox |= IsAABBInsideBoundingVolume( ms_aShadowCasterBoundingPlanes[i], 5, entityBBox );
 
-            if ( isInsideLightBBox )
-                AddEntityToShadowCasterList( shadowEntity, renderDistance, 0 );
+            if ( isInsideLightBBox && AddEntityToShadowCasterList( shadowEntity, renderDistance, 0 ) )
+                ms_aActiveShadowCasters.push_back( shadowEntity );
         }
         else
         {
+            bool isActiveCaster = false;
             for ( auto i = 0; i < gShadowSettings.ShadowCascadeCount; i++ )
             {
+                const bool cascadeUpdated = g_pDeferredRenderer->m_pShadowRenderer->IsCascadeUpdated( i );
+                // Cascades kept from an earlier frame aren't re-rendered, but entities able to cast in them still hold
+                // shadows there and must suppress their coarser big-building LODs.
+                if ( !cascadeUpdated && ( isActiveCaster || !CanEntityCastShadow( shadowEntity ) ) )
+                    continue;
                 // Check if entity is inside light bounding volume 
                 isInsideLightBBox = IsAABBInsideBoundingVolume( ms_aShadowCasterBoundingPlanes[i], 5, entityBBox );
-                if ( isInsideLightBBox )
-                    AddEntityToShadowCasterList( shadowEntity, renderDistance, i );
+                if ( !isInsideLightBBox )
+                    continue;
+                if ( cascadeUpdated && !AddEntityToShadowCasterList( shadowEntity, renderDistance, i ) )
+                {
+                    isActiveCaster = false;
+                    break;
+                }
+                isActiveCaster = true;
             }
+            if ( isActiveCaster )
+                ms_aActiveShadowCasters.push_back( shadowEntity );
         }
     }
 }
@@ -953,6 +996,87 @@ void CRendererRH::ScanBigBuildingList( int x, int y )
 
 }
 
+// Big buildings (LODs) as shadow casters: a tall building towards a low sun shades the scene from hundreds of metres away,
+// even while off screen (where the game drops the building's own RwObject instance).
+// Scan the LOD sectors that reach into a cascade's light volume and add the LODs that aren't casting yet.
+void CRendererRH::ScanBigBuildingsForShadowCasters()
+{
+    // ScanBigBuildingList stamps every big building of the sectors it scans, also the ones it doesn't draw (off screen),
+    // so the scan code can't tell which ones already cast: include casters residing in retained cascades so their coarse
+    // LODs don't cast into updated cascades on staggered frames.
+    std::unordered_set<CEntity*> casters( ms_aActiveShadowCasters.begin(), ms_aActiveShadowCasters.end() );
+    // LODs of casters stand in for geometry that already casts: a LOD sits a little above or below its detailed
+    // version, so casting both shadows the detailed ground with the LOD (large straight-edged shadows around the camera)
+    std::unordered_set<CEntity*> replacedLods;
+    for ( CEntity *caster : casters )
+        for ( CEntity *lod = caster->m_pLod; lod != nullptr && replacedLods.insert( lod ).second; lod = lod->m_pLod )
+            ;
+
+    // Big buildings span multiple 200 m LOD sectors and can chain into coarser SuperLODs across sector boundaries, so
+    // deduplicate across all cascade-intersecting sectors and test finer LOD children before their coarser parents.
+    std::vector<CEntity*> candidates;
+    std::unordered_set<CEntity*> seen;
+    const int lodSectorRange = 3; // 200 m sectors: about 700 m around the camera
+    const int camSectorX = (int)floorf( ms_vecCameraPosition.x / 200.0f + 15.0f );
+    const int camSectorY = (int)floorf( ms_vecCameraPosition.y / 200.0f + 15.0f );
+    for ( int x = camSectorX - lodSectorRange; x <= camSectorX + lodSectorRange; x++ )
+    {
+        for ( int y = camSectorY - lodSectorRange; y <= camSectorY + lodSectorRange; y++ )
+        {
+            if ( x < 0 || y < 0 || x >= 30 || y >= 30 )
+                continue;
+            const float minX = ( x - 15 ) * 200.0f;
+            const float minY = ( y - 15 ) * 200.0f;
+            RW::BBox sectorBBox = { { minX, minY, -3000 }, { minX + 200.0f, minY + 200.0f, 3000 } };
+            bool isInsideLightBBox = false;
+            for ( int i = 0; i < gShadowSettings.ShadowCascadeCount && !isInsideLightBBox; i++ )
+                isInsideLightBBox = IsAABBInsideBoundingVolume( ms_aShadowCasterBoundingPlanes[i], 5, sectorBBox );
+            if ( !isInsideLightBBox )
+                continue;
+            for ( auto current = GetLodPtrList( x, y )->GetNode(); current != nullptr; current = current->pNext )
+            {
+                auto entity = (CEntity*)current->pItem;
+                if ( !seen.insert( entity ).second || casters.count( entity ) != 0 ||
+                     replacedLods.count( entity ) != 0 || !entity->m_bIsVisible ||
+                     ( entity->m_nAreaCode != CGame::currArea && entity->m_nAreaCode != 13 ) ) // 13: every area
+                    continue;
+                candidates.push_back( entity );
+            }
+        }
+    }
+
+    auto lodChainDepth = []( const CEntity *entity ) {
+        int depth = 0;
+        for ( const CEntity *lod = entity->m_pLod; lod != nullptr && depth < 16; lod = lod->m_pLod )
+            ++depth;
+        return depth;
+    };
+    std::stable_sort( candidates.begin(), candidates.end(),
+                      [&]( const CEntity *a, const CEntity *b ) { return lodChainDepth( a ) > lodChainDepth( b ); } );
+
+    for ( CEntity *entity : candidates )
+    {
+        CBaseModelInfo *modelInfo = CModelInfo::ms_modelInfoPtrs[entity->m_nModelIndex];
+        CEntity *target = ( modelInfo != nullptr && modelInfo->m_nAlpha == 0 && entity->m_pLod != nullptr )
+                              ? entity->m_pLod
+                              : entity;
+        if ( casters.count( entity ) != 0 || replacedLods.count( entity ) != 0 ||
+             casters.count( target ) != 0 || replacedLods.count( target ) != 0 )
+            continue;
+        const size_t prevActiveCount = ms_aActiveShadowCasters.size();
+        AddEntityToShadowCastersIfNeeded( entity, true );
+        for ( size_t idx = prevActiveCount; idx < ms_aActiveShadowCasters.size(); ++idx )
+        {
+            CEntity *addedCaster = ms_aActiveShadowCasters[idx];
+            casters.insert( addedCaster );
+            for ( CEntity *lod = addedCaster->m_pLod;
+                  lod != nullptr && replacedLods.insert( lod ).second;
+                  lod = lod->m_pLod )
+                ;
+        }
+    }
+}
+
 void CRendererRH::ScanSectorListForReflections( int x, int y )
 {
     CSector*	  sector = GetSector( x, y );
@@ -1010,6 +1134,9 @@ else {*/
 
 }
 
+// Same as the game's CRenderer::ProcessLodRenderLists. m_nNumLodChildrenRendered is a signed byte in the game: the count of
+// LOD children rendered this frame, or negative (0x80) when they can't render (their models aren't loaded). plugin-sdk
+// declares it unsigned, so it is compared as signed here.
 void CRendererRH::ProcessLodRenderLists()
 {
     if ( ms_pLodRenderList == GetLodRenderListBase() )
@@ -1024,65 +1151,25 @@ void CRendererRH::ProcessLodRenderLists()
             current->entity = nullptr;
         }
     }
-    // than remove all rendered lods and request all unloaded lods
-    bool renderedLodsExist = true;
-    while ( renderedLodsExist )
-    {
-        renderedLodsExist = false;
-        for ( auto current = GetLodRenderListBase(); current != ms_pLodRenderList; current++ )
-        {
-            auto entity = current->entity;
-
-            if ( entity )
-            {
-                auto numLodChildren = (char)entity->m_nNumLodChildren;
-                // if every lod children has been rendered, than
-                if ( numLodChildren > 0 && entity->m_nNumLodChildrenRendered == numLodChildren )
-                {
-                    entity->m_nNumLodChildrenRendered = 0;
-                    current->entity = nullptr;
-                    renderedLodsExist = true;
-                }
-                else
-                {
-                    auto lod = entity->m_pLod;
-                    if ( lod )
-                    {
-                        if ( CModelInfo::ms_modelInfoPtrs[entity->m_nModelIndex]->m_nAlpha < 0xFFu &&
-                             lod->m_nNumLodChildrenRendered != 0x80u && lod->m_bDisplayedSuperLowLOD )
-                            lod->m_nNumLodChildrenRendered = 0;
-
-                        if ( entity->m_pRwObject == nullptr )
-                        {
-                            if ( lod->m_bDisplayedSuperLowLOD )
-                                lod->m_nNumLodChildrenRendered = 0x80u;
-                            current->entity = nullptr;
-                            entity->m_nNumLodChildrenRendered = 0;
-                            CStreaming::RequestModel( entity->m_nModelIndex, 0 );
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // remove all rendered lods
+    // (the game's next loop, which drops entries whose model isn't loaded, never runs: its loop flag starts false)
+    // remove the lods whose children were rendered
     for ( auto current = GetLodRenderListBase(); current != ms_pLodRenderList; current++ )
     {
         auto entity = current->entity;
-        if ( entity && entity->m_nNumLodChildrenRendered > 0 )
+        if ( entity && static_cast<signed char>( entity->m_nNumLodChildrenRendered ) > 0 )
         {
             entity->m_bDisplayedSuperLowLOD = false;
             entity->m_nNumLodChildrenRendered = 0;
             current->entity = nullptr;
         }
     }
-    // add last lods to renderlist
+    // render the remaining lods: their children can't render (negative) or none of them was rendered
     for ( auto current = GetLodRenderListBase(); current != ms_pLodRenderList; current++ )
     {
         auto entity = current->entity;
         if ( entity )
         {
-            if ( entity->m_nNumLodChildrenRendered == 0x80u )
+            if ( static_cast<signed char>( entity->m_nNumLodChildrenRendered ) <= 0 )
             {
                 entity->m_bDisplayedSuperLowLOD = true;
                 if ( CModelInfo::ms_modelInfoPtrs[entity->m_nModelIndex]->m_nAlpha != 0xFF )
@@ -1180,6 +1267,7 @@ void CRendererRH::ScanWorld( RwCamera* camera, RwV3d* gameCamPos, float shadowSt
     sector[4].y = points[10].y * 0.02f + 60.0f;
     ms_aVisibleEntities.clear();
     ms_aVisibleLods.clear();
+    ms_aActiveShadowCasters.clear();
     for ( int i = 0; i < 4; i++ )
         ms_aVisibleShadowCasters[i].clear();
     //RwBBox bbox;
@@ -1324,6 +1412,7 @@ void CRendererRH::ScanWorld()
     RwV3dTransformPoints( points, points, 17, m );
     m_loadingPriority = 0;
     ms_aVisibleReflectionObjects.clear();
+    ms_aActiveShadowCasters.clear();
     for ( int i = 0; i < 4; i++ )
         ms_aVisibleShadowCasters[i].clear();
     for ( auto i = 0; i < 4; i++ )
@@ -1424,6 +1513,7 @@ void CRendererRH::ScanWorld()
 
         }
     }
+    ScanBigBuildingsForShadowCasters();
     /*for (size_t i = 0; i < gShadowSettings.MaxSectorsAroundPlayer * 2 - 1; i++)
     {
         tt[i].join();
@@ -1500,8 +1590,8 @@ sLodListEntry *CRendererRH::GetLodDontRenderListBase()
 
 void CRendererRH::CalculateShadowBoundingPlanes( int shadowCascade )
 {
-    auto lightSpaceFrustum = g_pDeferredRenderer->m_pShadowRenderer->m_LightSpaceMatrix[0];
-    RW::V3d  LightAABBCenter = { g_pDeferredRenderer->m_pShadowRenderer->m_LightPos[0] };
+    auto lightSpaceFrustum = g_pDeferredRenderer->m_pShadowRenderer->m_LightSpaceMatrix[shadowCascade];
+    RW::V3d  LightAABBCenter = { g_pDeferredRenderer->m_pShadowRenderer->m_LightPos[shadowCascade] };
     RW::BBox lightAABB = g_pDeferredRenderer->m_pShadowRenderer->m_LightBBox[shadowCascade];
     auto lightAABBX = lightAABB.getSizeX();
     auto lightAABBY = lightAABB.getSizeY();

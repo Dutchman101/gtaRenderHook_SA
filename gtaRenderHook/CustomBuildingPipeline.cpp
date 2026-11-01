@@ -12,6 +12,7 @@
 #include "D3DRenderer.h"
 #include "DeferredRenderer.h"
 #include "PBSMaterial.h"
+#include "PluginDrawCallback.h"
 #include "Renderer.h"
 #include "RwD3D1XEngine.h"
 #include "stdafx.h"
@@ -83,6 +84,7 @@ void CCustomBuildingPipeline::RenderAlphaList()
                                curmesh.material ) );
         float fGlossiness = RpMaterialGetFxEnvShininess( curmesh.material );
 
+        NotifyBuildingDraw( mesh.atomic, mesh.worldMatrix, mesh.meshID, RH_PASS_BLENDED, false );
         g_pRenderBuffersMgr->UpdateWorldMatrix( mesh.worldMatrix );
         g_pRenderBuffersMgr->SetMatrixBuffer();
         g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
@@ -147,6 +149,8 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         m_pPS->Set();
     BOOL    oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
     RwUInt8 bAlphaEnable  = 0;
+    RwMatrix *ltm  = RwFrameGetLTM( static_cast<RwFrame *>( atomic->object.object.parent ) );
+    const int pass = CurrentBuildingDrawPass();
     for ( size_t i = 0; i < static_cast<size_t>( entryData->header.numMeshes );
           i++ )
     {
@@ -154,14 +158,19 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         if ( mesh.material->color.alpha == 0 )
             continue;
         bAlphaEnable = 0;
+        const unsigned int drawFlags = NotifyBuildingDraw( atomic, ltm, (int)i, pass, false );
+        const bool vertexAlpha =
+            mesh.vertexAlpha && !( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY );
         // if (m_uiDeferredStage != 2) {
+        RwRGBA color = mesh.material->color;
+        // fading entity: draw opaque in the G-buffer so LOD cross-fades do not dither against empty background
+        if ( m_uiDeferredStage == 1 && CRendererRH::FadingPass )
+            color.alpha = 255;
         if ( mesh.material->surfaceProps.ambient > 1.0 ||
              CRendererRH::TOBJpass == true )
-            g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor(
-                mesh.material->color );
+            g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor( color );
         else
-            g_pRenderBuffersMgr->UpdateMaterialDiffuseColor(
-                mesh.material->color );
+            g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( color );
         float fSpec = ( std::max )(
             CWeather::WetRoads,
             CCustomCarEnvMapPipeline__GetFxSpecSpecularity( mesh.material ) );
@@ -169,7 +178,7 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
         g_pRenderBuffersMgr->UpdateMaterialGlossiness( fGlossiness );
         //}
-        bAlphaEnable |= mesh.material->color.alpha != 255 || mesh.vertexAlpha;
+        bAlphaEnable |= color.alpha != 255 || vertexAlpha;
 
         g_pRwCustomEngine->SetTexture( mesh.material->texture, 0 );
 
@@ -195,12 +204,12 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         else
         {
             g_pStateMgr->SetAlphaBlendEnable( FALSE );
-            if ( bAlphaEnable > 0 )
+            // A fading entity (LOD cross-fade) gets its fade through the material alpha, which the game restores right
+            // after drawing it: on the forward alpha list it would be drawn fully opaque under the forward shader
+            // instead of deferred lighting, so draw it opaque in the G-buffer.
+            if ( bAlphaEnable > 0 && !CRendererRH::FadingPass )
             {
-                m_aAlphaMeshList.Push( { entryData,
-                                         RwFrameGetLTM( static_cast<RwFrame *>(
-                                             atomic->object.object.parent ) ),
-                                         (int)i } );
+                m_aAlphaMeshList.Push( { entryData, ltm, (int)i, 0, atomic } );
                 continue;
             }
         }
@@ -216,4 +225,5 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
     g_pStateMgr->SetRaster( nullptr, 2 );
     if ( m_uiDeferredStage == 3 || m_uiDeferredStage == 4 )
         m_pVoxelGS->ReSet();
+    g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
 }

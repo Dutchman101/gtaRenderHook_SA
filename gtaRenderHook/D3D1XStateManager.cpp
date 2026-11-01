@@ -206,6 +206,15 @@ void CD3D1XStateManager::SetFillMode( D3D11_FILL_MODE mode )
     }
 }
 
+void CD3D1XStateManager::SetDepthClipEnable( bool enable )
+{
+    if ( ( m_rasterDesc.DepthClipEnable != FALSE ) != enable )
+    {
+        m_rasterDesc.DepthClipEnable = enable;
+        m_bRasterDescReqUpdate = true;
+    }
+}
+
 
 
 void CD3D1XStateManager::SetAlphaTestEnable( bool bEnable )
@@ -242,6 +251,36 @@ void CD3D1XStateManager::SetZWriteEnable( bool bEnable )
         m_depthStencilDesc.DepthWriteMask = (D3D11_DEPTH_WRITE_MASK)bEnable;
         m_bDepthStencilDescReqUpdate = true;
     }
+}
+static D3D11_COMPARISON_FUNC MirrorDepthFunc( D3D11_COMPARISON_FUNC func )
+{
+    switch ( func )
+    {
+    case D3D11_COMPARISON_LESS:          return D3D11_COMPARISON_GREATER;
+    case D3D11_COMPARISON_LESS_EQUAL:    return D3D11_COMPARISON_GREATER_EQUAL;
+    case D3D11_COMPARISON_GREATER:       return D3D11_COMPARISON_LESS;
+    case D3D11_COMPARISON_GREATER_EQUAL: return D3D11_COMPARISON_LESS_EQUAL;
+    default:                             return func;
+    }
+}
+void CD3D1XStateManager::SetDepthFunc( D3D11_COMPARISON_FUNC func )
+{
+    m_depthFunc = func;
+    func = m_bReversedZ ? MirrorDepthFunc( func ) : func;
+    if ( m_depthStencilDesc.DepthFunc != func )
+    {
+        m_depthStencilDesc.DepthFunc = func;
+        m_bDepthStencilDescReqUpdate = true;
+    }
+}
+void CD3D1XStateManager::SetReversedZ( bool reversed )
+{
+    if ( m_bReversedZ == reversed )
+        return;
+    m_bReversedZ = reversed;
+    g_shaderRenderStateBuffer.fReversedZ = reversed ? 1.0f : 0.0f;
+    m_bGlobalValuesReqUpdate = true;
+    SetDepthFunc( m_depthFunc );
 }
 void CD3D1XStateManager::SetStencilEnable( BOOL bEnable )
 {
@@ -863,7 +902,8 @@ bool CD3D1XStateManager::IsDepthDescRequiresUpdate()
 bool CD3D1XStateManager::IsRasterDescRequiresUpdate()
 {
     return	m_rasterDescOld.CullMode != m_rasterDesc.CullMode ||
-        m_rasterDescOld.FillMode != m_rasterDesc.FillMode;
+        m_rasterDescOld.FillMode != m_rasterDesc.FillMode ||
+        m_rasterDescOld.DepthClipEnable != m_rasterDesc.DepthClipEnable;
 }
 bool CD3D1XStateManager::IsBlendDescRequiresUpdate()
 {
