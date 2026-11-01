@@ -67,13 +67,13 @@ class RwGameHooks
     static int32_t GetRenderState( [[maybe_unused]] int32_t nState,
                                    void *                   pParam );
 
-    static void SetRefreshRate( uint32_t refreshRate );
-    static void SetVideoMode( uint32_t videomode );
+    static void    SetRefreshRate( uint32_t refreshRate );
+    static int32_t SetVideoMode( uint32_t videomode );
 
     static int32_t               Im3DSubmit();
     [[maybe_unused]] static void Im3DOpen();
 
-    static void    CheckNativeTextureSupport();
+    static int32_t CheckNativeTextureSupport();
     static int32_t CheckEnviromentMapSupport();
 
     static int32_t AtomicAllInOneNode( void *self, const void *params );

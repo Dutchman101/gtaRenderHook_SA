@@ -300,8 +300,10 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/, DWORD ul_reason_for_call,
                         reinterpret_cast<void *>(
                             D3D8SkinAtomicAllInOneNode ) ); // skin
 
-            // postprocess
-            RedirectCall( 0x53E227, reinterpret_cast<void *>( true_ret_hook ) );
+            // 0x53E227 is the tail-jump to CPostEffects::Render at the end of
+            // RenderEffects, immediately before Render2dStuff at 0x53E230; use
+            // a jump so returning goes back to Idle instead of falling through.
+            RedirectJump( 0x53E227, reinterpret_cast<void *>( empty_void ) );
             // Lights
             RedirectJump( 0x7000E0, reinterpret_cast<void *>( AddPtLight ) );
             // Clouds/Sky

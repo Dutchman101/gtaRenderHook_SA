@@ -77,7 +77,7 @@ void RwGameHooks::Patch( const RwPointerTable &pointerTable )
             reinterpret_cast<RegisterPluginCall>(
                 pointerTable.mMaterialRegisterPluginPtr );
 
-    if ( pointerTable.mMaterialRegisterPluginPtr )
+    if ( pointerTable.mMaterialSetStreamAlwaysCallbackPtr )
         gRwDeviceGlobals.PluginFuncs.MaterialSetStreamAlwaysCallBack =
             reinterpret_cast<SetStreamAlwaysCallBack>(
                 pointerTable.mMaterialSetStreamAlwaysCallbackPtr );
@@ -126,9 +126,12 @@ void RwGameHooks::Patch( const RwPointerTable &pointerTable )
         pointerTable.m_fpCheckEnviromentMapSupport,
         reinterpret_cast<void *>( CheckEnviromentMapSupport ) );
 
-    if ( pointerTable.m_fpCheckNativeTextureSupport )
-        RedirectCall( pointerTable.m_fpCheckNativeTextureSupport,
-                      reinterpret_cast<void *>( CheckNativeTextureSupport ) );
+    // 0x745530 (_psNativeTextureSupport) is a 5-byte jump thunk immediately
+    // before _psDebugMessageHandler at 0x745540; a call opcode pushes 0x745535
+    // and returns into the adjacent function instead of the caller.
+    RedirectJumpIfExists(
+        pointerTable.m_fpCheckNativeTextureSupport,
+        reinterpret_cast<void *>( CheckNativeTextureSupport ) );
 
     RedirectJumpIfExists( pointerTable.m_fpSetRefreshRate,
                           reinterpret_cast<void *>( SetRefreshRate ) );
@@ -171,15 +174,15 @@ void RwGameHooks::SetRefreshRate( uint32_t /*refreshRate*/ )
     debug::DebugLogger::Log( "RWGAMEHOOKS_LOG: SetRefreshRate" );
 }
 
-void RwGameHooks::SetVideoMode( uint32_t )
+int32_t RwGameHooks::SetVideoMode( uint32_t )
 {
     debug::DebugLogger::Log( "RWGAMEHOOKS_LOG: SetVideoMode" );
-    // g_pRwRenderEngine->UseMode( videomode );
+    return 1;
 }
 
 [[maybe_unused]] void RwGameHooks::Im3DOpen() {}
 
-void RwGameHooks::CheckNativeTextureSupport() {}
+int32_t RwGameHooks::CheckNativeTextureSupport() { return 1; }
 
 int32_t RwGameHooks::CheckEnviromentMapSupport() { return true; }
 
