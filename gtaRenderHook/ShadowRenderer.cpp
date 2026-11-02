@@ -111,11 +111,11 @@ RW::V3d CShadowRenderer::CalculateCameraPos( RwCamera* mainCam, const RW::V3d & 
     // Move the centre in whole shadow-map texels (in light space), so the texel grid stays fixed in the world and static
     // shadows don't shimmer when the camera moves.
     const RwReal texelSize = 2.0f * radius / static_cast<RwReal>( gShadowSettings.Size );
-    RW::V3d lightCenter = center * m_LightSpaceMatrix[shadowCascade];
+    RW::V3d lightCenter = center * m_InvLightSpaceMatrix[shadowCascade];
     lightCenter = { floorf( lightCenter.getX() / texelSize ) * texelSize, floorf( lightCenter.getY() / texelSize ) * texelSize,
                     lightCenter.getZ() };
     m_LightBBox[shadowCascade] = { lightCenter - RW::V3d{ radius, radius, radius }, lightCenter + RW::V3d{ radius, radius, radius } };
-    vFrustrumCenter = lightCenter * m_InvLightSpaceMatrix[shadowCascade];
+    vFrustrumCenter = lightCenter * m_LightSpaceMatrix[shadowCascade];
     /*RwCameraSetNearClipPlane(mainCam, oldNP);
     RwCameraSetFarClipPlane(mainCam, oldFP);
     RwCameraSync(mainCam);*/
@@ -170,7 +170,19 @@ void CShadowRenderer::SelectCascadesToUpdate( const RW::V3d &lightDir )
     // the sun moves slowly; a jump means a switch between sun and moon, or a teleport of the time of day
     const bool lightJumped = dir.dot( m_vLastLightDir ) < 0.9999f;
     m_vLastLightDir = dir;
-    const bool full = m_bForceFullUpdate || !m_bShadowHistoryValid || lightJumped || interval == 1;
+    RW::V3d camPos = ( Scene.m_pRwCamera && RwCameraGetFrame( Scene.m_pRwCamera ) )
+                         ? RW::V3d( *RwMatrixGetPos( RwFrameGetMatrix( RwCameraGetFrame( Scene.m_pRwCamera ) ) ) )
+                         : m_vLastCameraPos;
+    RW::V3d camAt  = ( Scene.m_pRwCamera && RwCameraGetFrame( Scene.m_pRwCamera ) )
+                         ? RW::V3d( *RwMatrixGetAt( RwFrameGetMatrix( RwCameraGetFrame( Scene.m_pRwCamera ) ) ) )
+                         : m_vLastCameraAt;
+    if ( camAt.length() > 0.0001f )
+        camAt.normalize();
+    const bool cameraJumped = ( camPos - m_vLastCameraPos ).length() > 25.0f ||
+                              ( m_vLastCameraAt.length() > 0.5f && camAt.dot( m_vLastCameraAt ) < 0.85f );
+    m_vLastCameraPos = camPos;
+    m_vLastCameraAt  = camAt;
+    const bool full = m_bForceFullUpdate || !m_bShadowHistoryValid || lightJumped || cameraJumped || interval == 1;
     m_bForceFullUpdate = false;
     // the first two cascades cover the view up close, where moving objects and their shadows are; further cascades
     // take turns, so a frame never re-renders more than one of them when the interval is at least their count
@@ -194,9 +206,15 @@ void CShadowRenderer::ClearCascade( int cascade )
     g_pStateMgr->SetDepthEnable( true );
     g_pStateMgr->SetZWriteEnable( true );
     g_pStateMgr->SetDepthFunc( D3D11_COMPARISON_ALWAYS );
+    const RwCullMode oldCullMode = g_pStateMgr->GetCullMode();
+    const BOOL oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
+    g_pStateMgr->SetCullMode( rwCULLMODECULLNONE );
+    g_pStateMgr->SetAlphaBlendEnable( FALSE );
     m_pDepthClearPS->Set();
     CFullscreenQuad::Draw();
     g_pStateMgr->SetDepthFunc( D3D11_COMPARISON_LESS_EQUAL );
+    g_pStateMgr->SetCullMode( oldCullMode );
+    g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
 }
 
 void CShadowRenderer::RenderShadowToBuffer( int cascade, void( *render )( int cascade ) )

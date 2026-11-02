@@ -35,6 +35,7 @@ static bool g_hasPrevViewProj = false;
 static bool g_externalTAAHandled = false;
 
 bool CTemporalAA::ExternalTAAActive() { return g_externalTAAHandled && gTAASettingsBlock.GetToggleField( "EnableTAA" ); }
+bool CTemporalAA::HasExternalHandler() { return g_externalTAA != nullptr; }
 
 void __cdecl RHSetTemporalAAHandler( RHTemporalAAHandler handler )
 {
@@ -78,6 +79,10 @@ static bool RunExternalTAA( RwRaster *input, RwRaster *output, RwRaster *gBuff1,
     frame.output   = RasterTexture2D( output );
     frame.gbuffer1 = RasterSRV( gBuff1 );
     frame.objectMotion = RasterSRV( CTemporalAA::m_pObjectMotionRaster );
+    if ( frame.gbuffer1 )
+        frame.gbuffer1->AddRef();
+    if ( frame.objectMotion )
+        frame.objectMotion->AddRef();
     frame.jitterX  = jitterX;
     frame.jitterY  = jitterY;
     memcpy( frame.view, &view, sizeof( frame.view ) );
@@ -87,6 +92,15 @@ static bool RunExternalTAA( RwRaster *input, RwRaster *output, RwRaster *gBuff1,
         frame.input->Release();
     if ( frame.output )
         frame.output->Release();
+    if ( frame.gbuffer1 )
+        frame.gbuffer1->Release();
+    if ( frame.objectMotion )
+        frame.objectMotion->Release();
+    if ( handled )
+    {
+        CD3D1XShader::InvalidateStateCache();
+        g_pStateMgr->InvalidateStateCache();
+    }
     return handled;
 }
 void CTemporalAA::Init()

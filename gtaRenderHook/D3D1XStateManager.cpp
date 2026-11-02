@@ -7,6 +7,7 @@
 #include "CDebug.h"
 #include "D3D1XBaseTexture.h"
 #include "D3D1X2DTexture.h"
+#include "D3D1XRenderBuffersManager.h"
 #include "RwD3D1XEngine.h"
 #include "D3DSpecificHelpers.h"
 
@@ -934,4 +935,40 @@ bool CD3D1XStateManager::IsViewportRequiresUpdate()
         m_viewport.TopLeftY != m_viewportOld.TopLeftY ||
         m_viewport.MaxDepth != m_viewportOld.MaxDepth ||
         m_viewport.MinDepth != m_viewportOld.MinDepth;
+}
+
+void CD3D1XStateManager::InvalidateStateCache()
+{
+    auto context = GET_D3D_CONTEXT;
+    context->OMSetBlendState( m_pBlendState, 0, UINT_MAX );
+    context->OMSetDepthStencilState( m_pDepthStencilState, m_currentStencilRef );
+    context->RSSetState( m_pRasterState );
+    context->DSSetSamplers( 0, 1, &m_pSamplerState );
+    context->PSSetSamplers( 0, 1, &m_pSamplerState );
+    context->PSSetSamplers( 1, 1, &m_pCompSamplerState );
+    context->PSSetConstantBuffers( 0, 1, &m_pGlobalValuesBuffer );
+    context->VSSetConstantBuffers( 0, 1, &m_pGlobalValuesBuffer );
+    context->HSSetConstantBuffers( 0, 1, &m_pGlobalValuesBuffer );
+    context->DSSetConstantBuffers( 0, 1, &m_pGlobalValuesBuffer );
+    context->CSSetConstantBuffers( 0, 1, &m_pGlobalValuesBuffer );
+
+    m_viewportOld.Width          = -1.0f;
+    m_pOldRaster                 = reinterpret_cast<RwRaster *>( -1 );
+    m_bRasterDescReqUpdate       = true;
+    m_bDepthStencilDescReqUpdate = true;
+    m_bBlendDescReqUpdate        = true;
+    m_bSampDescReqUpdate         = true;
+    m_bTopologyReqUpdate         = true;
+    m_bInputLayoutReqUpdate      = true;
+    m_bVertexBufferReqUpdate     = true;
+    m_bIndexBufferReqUpdate      = true;
+    m_bGlobalValuesReqUpdate     = true;
+    if ( g_pRenderBuffersMgr )
+        g_pRenderBuffersMgr->RebindConstantBuffers();
+    FlushStates();
+    for ( int i = 0; i < 8; i++ )
+        m_pCurrentRenderTargets[i] = nullptr;
+    m_pCurrentDepthStencilView       = nullptr;
+    m_currentRenderTargetNeedsUpdate = 0;
+    m_bRenderTargetReqUpdate         = false;
 }

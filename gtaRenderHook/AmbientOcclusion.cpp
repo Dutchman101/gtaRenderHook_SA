@@ -8,6 +8,7 @@
 #include "D3DRenderer.h"
 #include <game_sa\CScene.h>
 #include "FullscreenQuad.h"
+#include "D3D1X2DRenderTarget.h"
 #include <fstream>
 #include <iterator>
 AmbientOcclusionSettingsBlock gAmbientOcclusionSettings;
@@ -28,7 +29,29 @@ void CAmbientOcclusion::Init()
     // Presets may ship their own AmbientOcclusion.hlsl without the denoiser; a missing entry point can't be compiled.
     std::ifstream shaderFile( "shaders/AmbientOcclusion.hlsl" );
     const std::string shaderText( ( std::istreambuf_iterator<char>( shaderFile ) ), std::istreambuf_iterator<char>() );
-    if ( shaderText.find( "AODenoisePS" ) != std::string::npos )
+    std::string strippedText;
+    strippedText.reserve( shaderText.size() );
+    for ( size_t idx = 0; idx < shaderText.size(); )
+    {
+        if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '/' )
+        {
+            while ( idx < shaderText.size() && shaderText[idx] != '\n' )
+                ++idx;
+        }
+        else if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '*' )
+        {
+            idx += 2;
+            while ( idx + 1 < shaderText.size() && !( shaderText[idx] == '*' && shaderText[idx + 1] == '/' ) )
+                ++idx;
+            if ( idx + 1 < shaderText.size() )
+                idx += 2;
+        }
+        else
+        {
+            strippedText.push_back( shaderText[idx++] );
+        }
+    }
+    if ( strippedText.find( "AODenoisePS" ) != std::string::npos )
     {
         m_pDenoisePS = new CD3D1XPixelShader( "shaders/AmbientOcclusion.hlsl", "AODenoisePS", &gAmbientOcclusionSettings.m_ShaderDefineList );
         gAmbientOcclusionSettings.m_aShaderPointers.push_back( m_pDenoisePS );
@@ -49,6 +72,16 @@ void CAmbientOcclusion::Shutdown()
 
 void CAmbientOcclusion::RenderAO( RwRaster * normalsDepth )
 {
+    if ( !gAmbientOcclusionSettings.GetToggleField( "EnableAO" ) )
+    {
+        auto *aoRT = static_cast<CD3D1X2DRenderTarget *>( GetD3D1XRaster( m_pAORaser )->resourse );
+        if ( aoRT && aoRT->GetRenderTargetView() )
+        {
+            const float clearWhite[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            GET_D3D_CONTEXT->ClearRenderTargetView( aoRT->GetRenderTargetView(), clearWhite );
+        }
+        return;
+    }
     static unsigned int frame = 0;
     auto &cb = m_pAmbientOcclusionCB->data;
     cb.AORadius = gAmbientOcclusionSettings.GetFloat( "Radius" );
@@ -66,7 +99,7 @@ void CAmbientOcclusion::RenderAO( RwRaster * normalsDepth )
     g_pStateMgr->SetRaster( normalsDepth );
     m_pAmbientOcclusionPS->Set();
     CFullscreenQuad::Draw();
-    if ( !m_pDenoisePS )
+    if ( !m_pDenoisePS || !m_pDenoisePS->IsValid() )
         return;
 
     // Edge-aware blur, horizontal into the temporary target, then vertical back

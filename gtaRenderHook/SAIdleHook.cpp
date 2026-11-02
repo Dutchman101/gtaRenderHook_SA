@@ -228,7 +228,7 @@ void CSAIdleHook::RenderInGame()
 
     g_pDeferredRenderer->m_pShadowRenderer->m_bShadowHistoryValid = g_pDeferredRenderer->m_pShadowRenderer->m_bShadowsRendered;
     g_pDeferredRenderer->m_pShadowRenderer->m_bShadowsRendered = false;
-    if ( !CGame::currArea && ( m_fShadowDNBalance < 1.0 ) )
+    if ( gShadowSettings.GetToggleField( "Enable" ) && !CGame::currArea && ( m_fShadowDNBalance < 1.0 ) )
         PrepareRealTimeShadows( sunDirs[curr_sun_dir] );
 
     DebugRendering::ResetList();
@@ -254,7 +254,7 @@ void CSAIdleHook::RenderInGame()
 
     shadowTimer.Start();
 
-    if ( !CGame::currArea&&m_fShadowDNBalance < 1.0 ) // Render shadows only if we are not inside interiors
+    if ( gShadowSettings.GetToggleField( "Enable" ) && !CGame::currArea && m_fShadowDNBalance < 1.0 ) // Render shadows only if we are not inside interiors
         RenderRealTimeShadows( sunDirs[curr_sun_dir] );
 
     shadowTimer.Stop();
@@ -368,6 +368,7 @@ void CSAIdleHook::RenderForwardAfterDeferred()
     g_pCustomCarFXPipe->RenderAlphaList();
     g_pCustomBuildingPipe->RenderAlphaList();
     g_pCustomBuildingDNPipe->RenderAlphaList();
+    BreakManager_c__Render( g_breakMan, 1 );
     renderer->EndDebugEvent();
 
     //CPostEffects__m_bDisableAllPostEffect = true;
@@ -390,14 +391,14 @@ void CSAIdleHook::RenderDeferred()
     //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATECULLMODE, rwCULLMODECULLBACK);
     CRendererRH::RenderRoads();
     CRendererRH::RenderEverythingBarRoads();
-    CRendererRH::FadingPass = true;
+    // FadingPass is scoped inside CVisibilityPluginsRH::RenderAlphaAtomic
     CVisibilityPlugins::RenderFadingUnderwaterEntities();
-    CRendererRH::FadingPass = false;
+    // Non-fading DrawLast entities stay on the forward alpha path
     BreakManager_c__Render( g_breakMan, 0 );
-    CRendererRH::FadingPass = true;
+    // FadingPass is scoped inside CVisibilityPluginsRH::RenderAlphaAtomic
     CVisibilityPlugins::RenderFadingEntities();
-    CRendererRH::FadingPass = false;
-    BreakManager_c__Render( g_breakMan, 1 );
+    // Non-fading DrawLast entities stay on the forward alpha path
+    // BreakManager_c::Render(1) moved to RenderForwardAfterDeferred for translucent breakables
     // CRenderer::RenderFadingInUnderwaterEntities
     CVisibilityPluginsRH::RenderWeaponPedsNoMuzzleFlash();
     //CRenderer::RenderTOBJs();

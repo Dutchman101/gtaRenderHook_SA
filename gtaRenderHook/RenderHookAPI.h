@@ -12,15 +12,16 @@ struct RHTemporalAAFrame
     unsigned int              size; // sizeof( RHTemporalAAFrame ) for ABI extension checks
     ID3D11DeviceContext *     context; // RenderHook immediate device context
     ID3D11Texture2D *         input; // jittered HDR scene color for the current frame
-    ID3D11Texture2D *         output; // destination anti-aliased HDR texture (matches input size and format)
-    ID3D11ShaderResourceView *gbuffer1; // G-buffer 1: encoded view-space normals (xy) and view-space depth (zw)
+    ID3D11Texture2D *         output; // destination anti-aliased HDR texture (matches input size and format; created with D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, plus D3D11_BIND_UNORDERED_ACCESS on FL 11.0+)
+    ID3D11ShaderResourceView *gbuffer1; // G-buffer 1: encoded view-space normals (xy) and EncodeFloatRG(ViewZ / fFarClip) normalized depth (zw)
     float                     jitterX; // NDC projection offset applied to _31 (x) and _32 (y) this frame
     float                     jitterY;
     float                     view[16]; // current view matrix (row vectors, matching RwD3D9D3D9ViewTransform)
-    float                     projection[16]; // current unjittered projection matrix (matching RwD3D9D3D9ProjTransform)
+    float                     projection[16]; // current unjittered reversed-Z projection matrix (near = 1, far = 0; matching RwD3D9D3D9ProjTransform)
     // Valid when size >= offsetof( RHTemporalAAFrame, objectMotion ) + sizeof( objectMotion ).
     // RGBA16F SRV (or nullptr): xy = unjittered pixel displacement to the previous frame,
-    // z = 1 where a dynamic object wrote its own motion and 0 where camera depth reprojection applies.
+    // z = 1 where a geometry pipeline wrote per-vertex object motion (static or dynamic) and 0 where camera depth reprojection applies.
+    // All COM pointers in RHTemporalAAFrame are AddRef'd for the duration of the callback and Released by the caller.
     ID3D11ShaderResourceView *objectMotion;
 };
 
@@ -62,7 +63,7 @@ struct RHBuildingDraw
     unsigned int         size; // sizeof( RHBuildingDraw ) for ABI extension checks
     ID3D11DeviceContext *context; // immediate context for binding custom per-draw constant buffers
     void *               atomic; // owning RpAtomic *
-    const float *        worldMatrix; // 16-float RwMatrix LTM (translation at [12], [13], [14])
+    const float *        worldMatrix; // 16-float RwMatrix LTM (3x4 rotation/translation with integer flags/pad at [3], [7], [11], [15]; translation at [12], [13], [14])
     int                  meshIndex; // mesh index within the atomic geometry
     int                  pass; // RHDrawPass value
     int                  dualPassEdges; // 1 during the soft-edge blended draw of a dual-pass mesh

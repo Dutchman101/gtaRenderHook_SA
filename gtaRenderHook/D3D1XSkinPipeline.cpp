@@ -158,10 +158,11 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
             memcpy( history.previous, m_pSkinningDataBuffer->data.mSkinToWorldMatrices, sizeof( history.previous ) );
         memcpy( history.current, m_pSkinningDataBuffer->data.mSkinToWorldMatrices, sizeof( history.current ) );
         history.frame = frame;
-        if ( ( frame & 255 ) == 0 )
+        static unsigned int s_lastCleanupFrame = 0;
+        if ( s_lastCleanupFrame != frame && ( s_lastCleanupFrame = frame ) != 0 )
         {
             for ( auto it = m_boneHistory.begin(); it != m_boneHistory.end(); )
-                it = frame - it->second.frame > 2 ? m_boneHistory.erase( it ) : std::next( it );
+                it = frame - it->second.frame > 1 ? m_boneHistory.erase( it ) : std::next( it );
         }
     }
     memcpy( m_pSkinningDataBuffer->data.mSkinToWorldMatricesPrev, history.previous,

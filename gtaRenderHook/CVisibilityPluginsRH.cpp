@@ -2,6 +2,8 @@
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "stdafx.h"
 #include "CVisibilityPluginsRH.h"
+#include "D3D1XBasePipeline.h"
+#include "Renderer.h"
 #include <game_sa\CPed.h>
 #include <game_sa\common.h>
 RwV3d &g_vParachuteOffset = *(RwV3d*)0x8D60B0;
@@ -70,9 +72,42 @@ void CVisibilityPluginsRH::ClearWeaponPedsList()
     ms_weaponPeds.clear();
 }
 
+RpAtomic* CVisibilityPluginsRH::RenderAlphaAtomic( RpAtomic *atomic, int fadeAlpha )
+{
+    if ( atomic == nullptr || atomic->geometry == nullptr )
+        return atomic;
+    RwUInt8 savedAlpha[160];
+    RpGeometry *geometry = atomic->geometry;
+    RwUInt32 oldFlags = geometry->flags;
+    geometry->flags = oldFlags | rpGEOMETRYMODULATEMATERIALCOLOR;
+
+    const RwInt32 numMaterials = min( geometry->matList.numMaterials, 160 );
+    const RwUInt8 clampedFade  = static_cast<RwUInt8>( max( 0, min( fadeAlpha, 255 ) ) );
+    for ( RwInt32 i = 0; i < numMaterials; ++i )
+    {
+        RpMaterial *mat = geometry->matList.materials[i];
+        savedAlpha[i] = mat->color.alpha;
+        if ( mat->color.alpha > clampedFade )
+            mat->color.alpha = clampedFade;
+    }
+
+    const bool prevFading = CRendererRH::FadingPass;
+    CRendererRH::FadingPass = ( m_uiDeferredStage == 1 );
+    ( (RpAtomic * (__cdecl *)( RpAtomic * ))0x7491C0 )( atomic );
+    CRendererRH::FadingPass = prevFading;
+
+    for ( RwInt32 i = 0; i < numMaterials; ++i )
+    {
+        geometry->matList.materials[i]->color.alpha = savedAlpha[i];
+    }
+    geometry->flags = oldFlags;
+    return atomic;
+}
+
 void CVisibilityPluginsRH::Patch()
 {
     RedirectCall( 0x5E7859, AddPedWithWeapons );
+    RedirectJump( 0x732480, RenderAlphaAtomic );
 }
 
 void CVisibilityPluginsRH::DisableGunFlashAlpha( CPed *ped )

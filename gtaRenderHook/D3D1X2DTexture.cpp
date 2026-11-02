@@ -26,6 +26,11 @@ CD3D1X2DTexture::CD3D1X2DTexture( RwRaster * parent, D3D11_BIND_FLAG bindFlags,
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = ( m_bShaderAccess ? D3D11_BIND_SHADER_RESOURCE : 0 ) | m_dwBindFlags;
+    UINT fmtSupport = 0;
+    if ( ( desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS ) &&
+         ( FAILED( dev->CheckFormatSupport( desc.Format, &fmtSupport ) ) ||
+           !( fmtSupport & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW ) ) )
+        desc.BindFlags &= ~D3D11_BIND_UNORDERED_ACCESS;
     desc.CPUAccessFlags = 0;
     desc.MiscFlags = 0;
 
@@ -104,6 +109,11 @@ void CD3D1X2DTexture::Reallocate()
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = ( m_bShaderAccess ? D3D11_BIND_SHADER_RESOURCE : 0 ) | m_dwBindFlags;
+    UINT fmtSupport = 0;
+    if ( ( desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS ) &&
+         ( FAILED( dev->CheckFormatSupport( desc.Format, &fmtSupport ) ) ||
+           !( fmtSupport & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW ) ) )
+        desc.BindFlags &= ~D3D11_BIND_UNORDERED_ACCESS;
     desc.CPUAccessFlags = 0;
     desc.MiscFlags = 0;
 

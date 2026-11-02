@@ -371,6 +371,11 @@ void CD3D1XTexture::Resize( UINT newWidth, UINT newHeight )
 
         break;
     case eD3D1XTextureType::TT_RenderTarget:
+        if ( m_renderTargetRV )
+        {
+            m_renderTargetRV->Release();
+            m_renderTargetRV = nullptr;
+        }
         InitCameraTextureRaster( dev, &desc, d3dRaster, 0 );
         break;
     case eD3D1XTextureType::TT_DepthStencil:
@@ -450,6 +455,11 @@ void CD3D1XTexture::Reload()
 
         break;
     case eD3D1XTextureType::TT_RenderTarget:
+        if ( m_renderTargetRV )
+        {
+            m_renderTargetRV->Release();
+            m_renderTargetRV = nullptr;
+        }
         InitCameraTextureRaster( dev, &desc, d3dRaster, 0 );
         break;
     case eD3D1XTextureType::TT_DepthStencil:

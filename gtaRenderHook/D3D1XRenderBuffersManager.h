@@ -141,6 +141,7 @@ public:
         Flushes all material buffer changes if there was any
     */
     void FlushMaterialBuffer();
+    void RebindConstantBuffers();
 private:
     CD3D1XConstantBuffer<PerFrameMatrixBuffer> *	m_pPerFrameMatrixBuffer = nullptr;
     CD3D1XConstantBuffer<PerObjectMatrixBuffer> *	m_pPerObjectMatrixBuffer = nullptr;

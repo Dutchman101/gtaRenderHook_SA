@@ -132,19 +132,30 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
         RwUInt8 bAlphaEnable = 0;
         auto    mesh         = GetModelsData( entryData )[i];
         bAlphaEnable         = 0;
+        if ( mesh.material->color.alpha == 0 )
+            continue;
         const unsigned int drawFlags = NotifyBuildingDraw( atomic, ltm, (int)i, pass, false );
-        const bool vertexAlpha =
-            mesh.vertexAlpha && !( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY );
-        // if (mesh.material->color.alpha == 0) continue;
+        const bool ignoreVertAlpha = ( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY ) != 0;
+        const bool vertexAlpha     = mesh.vertexAlpha && !ignoreVertAlpha;
+        const bool texHasAlpha     = mesh.material->texture && mesh.material->texture->raster &&
+                                     GetD3D1XRaster( mesh.material->texture->raster )->alpha;
+        if ( m_uiDeferredStage == 1 && !dithering && !CRendererRH::FadingPass &&
+             ( mesh.material->color.alpha != 255 || vertexAlpha || ( texHasAlpha && !dualPassEnabled ) ) )
+        {
+            m_aAlphaMeshList.Push( { entryData, ltm, (int)i, 0, atomic } );
+            continue;
+        }
+        // vertexAlpha computed above
+        // zero-alpha materials skipped above
         if ( m_uiDeferredStage != 2 )
         {
             RwRGBA color = mesh.material->color;
             if ( m_uiDeferredStage == 1 )
             {
-                color.alpha = max( color.alpha, 2 );
+                color.alpha = ( CRendererRH::FadingPass && CTemporalAA::ExternalTAAActive() ) ? 255 : max<RwUInt8>( color.alpha, 2 );
                 // fading entity: draw opaque so LOD cross-fades do not dither against empty background
-                if ( CRendererRH::FadingPass )
-                    color.alpha = 255;
+                // handled above
+                // handled above
             }
             if ( mesh.material->surfaceProps.ambient > 1.0 )
                 g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor( color );
@@ -190,8 +201,9 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
         const bool dualPass = dualPassEnabled && bAlphaEnable > 0 &&
                               effectiveAlpha == 255 && !vertexAlpha;
         const bool gBufferPass = m_uiDeferredStage == 1 || m_uiDeferredStage == 2;
-        g_pRenderBuffersMgr->UpdateAlphaPass( dualPass && gBufferPass ? alphaCutoff : 0.0f, false,
-                                              dualPass && m_uiDeferredStage == 1 ? mipCoverage : 0.0f );
+        const float passMipCoverage = ( dualPass && m_uiDeferredStage == 1 ) ? mipCoverage : ( pass == RH_PASS_FORWARD && ignoreVertAlpha ) ? -1.0f : 0.0f;
+        g_pRenderBuffersMgr->UpdateAlphaPass( dualPass && gBufferPass ? alphaCutoff : 0.0f, false, passMipCoverage );
+        // mipCoverage passed above
         if ( m_uiDeferredStage != 1 )
             g_pStateMgr->SetAlphaBlendEnable( bAlphaEnable > 0 );
         else
@@ -271,8 +283,9 @@ void CCustomBuildingDNPipeline::RenderAlphaList()
         g_pRwCustomEngine->SetTexture( curmesh.material->texture, 0 );
 
         const bool dualPass = ( mesh.flags & ALPHA_MESH_DUAL_PASS ) != 0;
-        NotifyBuildingDraw( mesh.atomic, mesh.worldMatrix, mesh.meshID, RH_PASS_BLENDED, dualPass );
-        g_pRenderBuffersMgr->UpdateAlphaPass( dualPass ? alphaCutoff : 0.0f, dualPass );
+        const unsigned int drawFlags = NotifyBuildingDraw( mesh.atomic, mesh.worldMatrix, mesh.meshID, RH_PASS_BLENDED, dualPass );
+        const bool ignoreVertAlpha = ( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY ) != 0;
+        g_pRenderBuffersMgr->UpdateAlphaPass( dualPass ? alphaCutoff : 0.0f, dualPass, ignoreVertAlpha ? -1.0f : 0.0f );
         g_pRenderBuffersMgr->FlushMaterialBuffer();
         g_pStateMgr->FlushStates();
         GET_D3D_RENDERER->DrawIndexed( curmesh.numIndex, curmesh.startIndex,

@@ -9,6 +9,8 @@
 #include "RwD3D1XEngine.h"
 #include "D3D1XEnumParser.h"
 #include "DeferredRenderer.h"
+#include <fstream>
+#include <iterator>
 
 CD3D1XIm3DPipeline::CD3D1XIm3DPipeline() :
 #ifndef DebuggingShaders
@@ -29,7 +31,33 @@ CD3D1XIm3DPipeline::CD3D1XIm3DPipeline() :
     m_pIndexBuffer = new CD3D1XDynamicIndexBuffer( m_uiIndexCapacity );
     m_pVertexBuffer->SetDebugName( "Im3D_DynamicVB" );
     m_pIndexBuffer->SetDebugName( "Im3D_DynamicIB" );
-    m_pDeferredPS = new CD3D1XPixelShader( "shaders/" + m_sPipeName + ".hlsl", "DeferredPS" );
+    const std::string shaderPath = "shaders/" + m_sPipeName + ".hlsl";
+    std::ifstream shaderFile( shaderPath );
+    const std::string shaderText( ( std::istreambuf_iterator<char>( shaderFile ) ), std::istreambuf_iterator<char>() );
+    std::string strippedText;
+    strippedText.reserve( shaderText.size() );
+    for ( size_t idx = 0; idx < shaderText.size(); )
+    {
+        if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '/' )
+        {
+            while ( idx < shaderText.size() && shaderText[idx] != '\n' )
+                ++idx;
+        }
+        else if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '*' )
+        {
+            idx += 2;
+            while ( idx + 1 < shaderText.size() && !( shaderText[idx] == '*' && shaderText[idx + 1] == '/' ) )
+                ++idx;
+            if ( idx + 1 < shaderText.size() )
+                idx += 2;
+        }
+        else
+        {
+            strippedText.push_back( shaderText[idx++] );
+        }
+    }
+    if ( strippedText.find( "DeferredPS" ) != std::string::npos )
+        m_pDeferredPS = new CD3D1XPixelShader( shaderPath, "DeferredPS" );
 }
 
 // RenderWare takes up to 65535 vertices and indices per Im3D batch. Plugins draw more than the initial 10000 (e.g. the
@@ -83,7 +111,8 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
         m_pVS->Set();
         // The game draws smashed objects (e.g. a knocked-over lamppost) in immediate mode from the G-buffer pass. There every
         // G-buffer target has to be written and nothing blended, or the pieces get the normals and depth of what is behind.
-        if ( m_uiDeferredStage == 1 )
+        const BOOL oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
+        if ( m_uiDeferredStage == 1 && m_pDeferredPS && m_pDeferredPS->IsValid() )
         {
             m_pDeferredPS->Set();
             g_pStateMgr->SetAlphaBlendEnable( FALSE );
@@ -100,11 +129,13 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
 
             g_pStateMgr->FlushStates();
             pImmediateContext->DrawIndexed( im3dPoolStash.numIndices, 0, 0 );
+            g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
         }
         else
         {
             g_pStateMgr->FlushStates();
             pImmediateContext->Draw( rwD3D9ImmPool->numElements, 0 );
+            g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
         }
     }
     else

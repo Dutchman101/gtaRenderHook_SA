@@ -162,7 +162,7 @@ float4 PS( PS_DEFERRED_CF_IN i )
         SpecularTerm * fSpecularIntensity * vSunLightDir.w * vSunColor.rgb *
             ShadowTerm +
         ReflectionFallBack * fSpecularIntensity;
-    outColor.a = albedoSample.a * i.vColor.a;
+    float vertAlpha = ( fAlphaMipCoverage < 0.0f ) ? 1.0f : i.vColor.a; outColor.a = albedoSample.a * vertAlpha;
     outColor.rgb =
         CalculateFogColor( outColor.rgb, ViewDir, LightDir, i.vNormalDepth.w,
                            WorldPos.z, FullScattering );
@@ -184,9 +184,9 @@ void VoxelPS(PS_VOXEL_INPUT i)
 }
 void ShadowPS(PS_DEFERRED_IN i)
 {
-    float4 baseColor = txDiffuse.Sample(samLinear, i.vTexCoord.xy) * cDiffuseColor;
-	if (baseColor.a < 0.3)
-		discard;
+    float4 baseColor = txDiffuse.Sample(samLinear, i.vTexCoord.xy) * cDiffuseColor; if ( baseColor.a < 0.3 ) discard;
+	// alpha test handled above
+		// discard handled above
 }
 PS_DEFERRED_OUT DeferredPS(PS_DEFERRED_CF_IN i)
 {
@@ -207,10 +207,11 @@ PS_DEFERRED_OUT DeferredPS(PS_DEFERRED_CF_IN i)
         normal = normalize( mul( normal, tbn ) );
     }
     
-    FillGBuffer( Out, baseColor * cDiffuseColor, normal, i.vNormalDepth.w,
+    if ( baseColor.a < 0.3 ) discard; if ( cDiffuseColor.a <= 0.95f && InterleavedGradientNoise( i.vPosition.xy ) * cDiffuseColor.a < 0.2f ) discard;
+    FillGBuffer( Out, float4( baseColor.rgb * cDiffuseColor.rgb, 1.0f ), normal, i.vNormalDepth.w,
                  params );
-	if (baseColor.a < 0.3)
-		discard;
+	// alpha test handled above
+		// discard handled above
 	
 	Out.vObjectMotion = ObjectMotion(i.vCurClip, i.vPrevClip);
 	return Out;

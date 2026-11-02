@@ -68,10 +68,10 @@ void CD3D1XRenderBuffersManager::NextFrame()
 {
     m_nFrame++;
     // Periodically evict stale frame pointers from streamed-out or destroyed entities.
-    if ( ( m_nFrame & 255 ) == 0 )
+    if ( !m_worldHistory.empty() )
     {
         for ( auto it = m_worldHistory.begin(); it != m_worldHistory.end(); )
-            it = m_nFrame - it->second.frame > 2 ? m_worldHistory.erase( it ) : std::next( it );
+            it = m_nFrame - it->second.frame > 1 ? m_worldHistory.erase( it ) : std::next( it );
     }
 }
 
@@ -429,5 +429,18 @@ void CD3D1XRenderBuffersManager::FlushMaterialBuffer()
     {
         m_pPerMaterialBuffer->Update();
         m_bMaterialBufferRequiresUpdate = false;
+    }
+}
+
+void CD3D1XRenderBuffersManager::RebindConstantBuffers()
+{
+    if ( g_pStateMgr )
+    {
+        g_pStateMgr->SetConstantBufferVS( m_pPerFrameMatrixBuffer, 1 );
+        g_pStateMgr->SetConstantBufferPS( m_pPerFrameMatrixBuffer, 1 );
+        g_pStateMgr->SetConstantBufferCS( m_pPerFrameMatrixBuffer, 1 );
+        g_pStateMgr->SetConstantBufferDS( m_pPerFrameMatrixBuffer, 1 );
+        g_pStateMgr->SetConstantBufferVS( m_pPerObjectMatrixBuffer, 2 );
+        g_pStateMgr->SetConstantBufferPS( m_pPerMaterialBuffer, 3 );
     }
 }

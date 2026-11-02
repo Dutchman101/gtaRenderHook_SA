@@ -15,6 +15,7 @@
 #include "PluginDrawCallback.h"
 #include "Renderer.h"
 #include "RwD3D1XEngine.h"
+#include "TemporalAA.h"
 #include "stdafx.h"
 #include <game_sa\CWeather.h>
 
@@ -84,19 +85,23 @@ void CCustomBuildingPipeline::RenderAlphaList()
                                curmesh.material ) );
         float fGlossiness = RpMaterialGetFxEnvShininess( curmesh.material );
 
-        NotifyBuildingDraw( mesh.atomic, mesh.worldMatrix, mesh.meshID, RH_PASS_BLENDED, false );
+        // Draw callback runs after matrix and texture setup below
         g_pRenderBuffersMgr->UpdateWorldMatrix( mesh.worldMatrix );
         g_pRenderBuffersMgr->SetMatrixBuffer();
         g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
         g_pRenderBuffersMgr->UpdateMaterialGlossiness( fGlossiness );
 
         g_pRwCustomEngine->SetTexture( curmesh.material->texture, 0 );
+        const unsigned int drawFlags = NotifyBuildingDraw( mesh.atomic, mesh.worldMatrix, mesh.meshID, RH_PASS_BLENDED, false );
+        const bool ignoreVertAlpha = ( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY ) != 0;
+        g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false, ignoreVertAlpha ? -1.0f : 0.0f );
 
         g_pRenderBuffersMgr->FlushMaterialBuffer();
         g_pStateMgr->FlushStates();
         GET_D3D_RENDERER->DrawIndexed( curmesh.numIndex, curmesh.startIndex,
                                        curmesh.minVert );
     } );
+    g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false );
 }
 void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
                                       RwUInt8 type, RwUInt32 flags )
@@ -159,13 +164,24 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
             continue;
         bAlphaEnable = 0;
         const unsigned int drawFlags = NotifyBuildingDraw( atomic, ltm, (int)i, pass, false );
-        const bool vertexAlpha =
-            mesh.vertexAlpha && !( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY );
+        const bool ignoreVertAlpha = ( drawFlags & RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY ) != 0;
+        const bool vertexAlpha = mesh.vertexAlpha && !ignoreVertAlpha;
+        const bool texHasAlpha = mesh.material->texture && mesh.material->texture->raster &&
+                                 GetD3D1XRaster( mesh.material->texture->raster )->alpha;
+        if ( m_uiDeferredStage == 1 && !CRendererRH::FadingPass &&
+             ( mesh.material->color.alpha != 255 || vertexAlpha || texHasAlpha ) )
+        {
+            m_aAlphaMeshList.Push( { entryData, ltm, (int)i, 0, atomic } );
+            continue;
+        }
+        // vertexAlpha computed above
         // if (m_uiDeferredStage != 2) {
         RwRGBA color = mesh.material->color;
         // fading entity: draw opaque in the G-buffer so LOD cross-fades do not dither against empty background
+        // handled below
+        // apply fading alpha below
         if ( m_uiDeferredStage == 1 && CRendererRH::FadingPass )
-            color.alpha = 255;
+            color.alpha = CTemporalAA::ExternalTAAActive() ? 255 : max<RwUInt8>( color.alpha, 2 );
         if ( mesh.material->surfaceProps.ambient > 1.0 ||
              CRendererRH::TOBJpass == true )
             g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor( color );
@@ -178,7 +194,8 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
         g_pRenderBuffersMgr->UpdateMaterialGlossiness( fGlossiness );
         //}
-        bAlphaEnable |= color.alpha != 255 || vertexAlpha;
+        const RwUInt8 effectiveAlpha = ( m_uiDeferredStage == 1 && CRendererRH::FadingPass ) ? 255 : mesh.material->color.alpha;
+        bAlphaEnable |= effectiveAlpha != 255 || vertexAlpha;
 
         g_pRwCustomEngine->SetTexture( mesh.material->texture, 0 );
 
@@ -199,6 +216,7 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
                 }
             }
         }
+        g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false, pass == RH_PASS_FORWARD && ignoreVertAlpha ? -1.0f : 0.0f );
         if ( m_uiDeferredStage != 1 )
             g_pStateMgr->SetAlphaBlendEnable( bAlphaEnable > 0 );
         else
@@ -207,10 +225,10 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
             // A fading entity (LOD cross-fade) gets its fade through the material alpha, which the game restores right
             // after drawing it: on the forward alpha list it would be drawn fully opaque under the forward shader
             // instead of deferred lighting, so draw it opaque in the G-buffer.
-            if ( bAlphaEnable > 0 && !CRendererRH::FadingPass )
+            // alpha meshes already pushed before material/PBS setup
             {
-                m_aAlphaMeshList.Push( { entryData, ltm, (int)i, 0, atomic } );
-                continue;
+            // pushed above
+            // continue handled above
             }
         }
         drawCallCount++;
@@ -225,5 +243,6 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
     g_pStateMgr->SetRaster( nullptr, 2 );
     if ( m_uiDeferredStage == 3 || m_uiDeferredStage == 4 )
         m_pVoxelGS->ReSet();
+    g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false );
     g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
 }

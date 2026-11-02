@@ -27,6 +27,7 @@ public:
     static RwRaster *m_pObjectMotionRaster;
     // an external TAA (e.g. DLAA) replaced RenderHook's last frame: dithered transparency stays visible then
     static bool ExternalTAAActive();
+    static bool HasExternalHandler();
     // NDC offset from this frame's jitter to the previous frame's (SSR samples the previous frame)
     static float GetJitterDeltaX() { return m_fPrevJitterX - m_fJitterX; }
     static float GetJitterDeltaY() { return m_fPrevJitterY - m_fJitterY; }

@@ -260,3 +260,5 @@ ModelManifest.xml
 /cmake-build-release-x86/
 /cmake-build-relwithdebinfo-visual-studio-x64-llvm12/
 /.idea/
+shaders/cache/
+*.cso

@@ -299,7 +299,7 @@ float4 PS(PS_INPUT i) : SV_Target
     WaterDepth = max(0, WaterDepth);
 
     float ReflectionFallback;
-    float3 ReflectionColor = lerp(SSR(txGB0, txGB1, samLinear, i.vWorldPos, ReflectDir, 0.5f, ReflectionFallback), vSkyLightCol.rgb, ReflectionFallback);
+    float3 ReflectionColor = lerp(SSR(txGB0, txGB1, samLinear, i.vWorldPos, ReflectDir, 0.5f, ReflectionFallback, false ), vSkyLightCol.rgb, ReflectionFallback);
     float3 RefractionColor = txGB0.Sample(samLinear, ScreenCoords).rgb;
     RefractionColor = lerp(DiffuseTerm, RefractionColor, min(1, exp(-WaterDepth / 8.0))) * vWaterColor.rgb;
 

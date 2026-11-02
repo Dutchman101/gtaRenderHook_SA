@@ -73,7 +73,7 @@ float SampleShadowCascadeSoft(Texture2D txShadow, SamplerComparisonState samShad
     const float receiverZ = lp.z - ShadowBias[i];
 #if BLUR_SHADOWS == 1
     const float texelWorld = ShadowTexelWorldSize(i);
-    const float minTexels = max(1.5f, fMinShadowBlur / texelWorld);
+    const float minTexels = (fMinShadowBlur <= 0.0f) ? 0.0f : min(16.0f, max(1.0f, fMinShadowBlur / texelWorld));
 #if USE_PCS_SHADOWS == 1
     // blocker search over about 0.6 m: average depth of the casters in front of the receiver
     const float searchTexels = clamp(0.6f / texelWorld, 2.0f, 16.0f);
@@ -219,15 +219,29 @@ float SampleShadowCascadesUnfiltered(Texture2D txShadow, SamplerComparisonState 
     float blendFactor;
     float far, near;
     float4 WorldPos = float4(worldPos.xyz, 1);
-    int i = dot(float4(CascadeCount > 0, CascadeCount > 1, CascadeCount > 2, CascadeCount > 3),
-			  float4(viewZ > FadeDistances.y, viewZ > FadeDistances.z, viewZ > FadeDistances.w, viewZ > FadeDistanceMax));
-    float3 LightViewPos = mul(WorldPos, DirLightViewProj[i]).xyz;
+    int i = -1;
+    float3 LightViewPos = 0.0f;
+    for (int c = 0; c < CascadeCount; c++)
+    {
+        float3 lpTest = mul(WorldPos, DirLightViewProj[c]).xyz;
+        if (all(abs(lpTest.xy) <= 0.99f) && lpTest.z >= 0.0f && lpTest.z <= 1.0f)
+        {
+            i = c;
+            LightViewPos = lpTest;
+            break;
+        }
+    }
+    if (i < 0)
+        return 1.0f;
+    // cascade selected by light-space bounds above
+    // LightViewPos assigned in loop above
+    // LightViewPos already computed in loop
     far = FadeDistanceMax;
     float2 shadowTCOffset = float2((float) i / CascadeCount, 0.0f);
     Shadow = SampleShadowMapUnfiltered(txShadow, samShadow, samShadowNonComp, LightViewPos, shadowTCOffset, i);
 	/*for (i = 0; i < CascadeCount; i++)
     {
-        float3 LightViewPos = mul(WorldPos, DirLightViewProj[i]).xyz;
+        // LightViewPos already computed in loop
         far = LFadeDistances[i + 1];
         near = LFadeDistances[i];
 		// Cascade blending factor

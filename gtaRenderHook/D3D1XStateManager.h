@@ -335,6 +335,7 @@ public:
         Returns current raster in slot #0.
     */
     RwRaster* GetRaster() { return m_pCurrentRaster; }
+    void InvalidateStateCache();
     /*!
         Returns current shader model postfix.
     */
@@ -345,7 +346,7 @@ public:
         shaderVersionMap[D3D_FEATURE_LEVEL_9_2] = "4_0_level_9_2";
         shaderVersionMap[D3D_FEATURE_LEVEL_9_3] = "4_0_level_9_3";
         shaderVersionMap[D3D_FEATURE_LEVEL_10_0] = "4_0";
-        shaderVersionMap[D3D_FEATURE_LEVEL_10_1] = "4_0";
+        shaderVersionMap[D3D_FEATURE_LEVEL_10_1] = "4_1"; // case D3D_FEATURE_LEVEL_10_1: return "4_1";
         shaderVersionMap[D3D_FEATURE_LEVEL_11_0] = "5_0";
         shaderVersionMap[D3D_FEATURE_LEVEL_11_1] = "5_0";
         shaderVersionMap[D3D_FEATURE_LEVEL_12_0] = "5_0";

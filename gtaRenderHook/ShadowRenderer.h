@@ -60,6 +60,8 @@ private:
     bool    m_bForceFullUpdate = true;
     UINT    m_uiFrame = 0;
     RW::V3d m_vLastLightDir{ 0, 0, 0 };
+    RW::V3d m_vLastCameraPos{ 0, 0, 0 };
+    RW::V3d m_vLastCameraAt{ 0, 0, 0 };
     class CD3D1XShader* m_pDepthClearPS = nullptr;
     RwMatrix* m_pLightViewProj;
     CD3D1XConstantBuffer<CBShadows>* m_pLightCB;

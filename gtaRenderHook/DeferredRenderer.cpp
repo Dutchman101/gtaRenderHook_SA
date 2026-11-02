@@ -148,7 +148,8 @@ void CDeferredRenderer::RenderToGBuffer( void ( *renderCB )() )
 
     renderer->BeginDebugEvent( L"GBuffer pass" );
     g_pRwCustomEngine->SetRenderTargets( m_aDeferredRasters,
-                                         Scene.m_pRwCamera->zBuffer, kGBufferTargets );
+                                         Scene.m_pRwCamera->zBuffer,
+                                         ( gTAASettingsBlock.GetToggleField( "EnableTAA" ) || CTemporalAA::HasExternalHandler() ) ? kGBufferTargets : kGBufferTargets - 1 );
     renderCB();
     g_pRwCustomEngine->SetRenderTargets( &Scene.m_pRwCamera->frameBuffer,
                                          Scene.m_pRwCamera->zBuffer, 1 );

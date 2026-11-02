@@ -61,8 +61,13 @@ PS_DEFERRED_OUT DeferredPS(PS_IM3D_IN i)
     float4 baseColor = i.cColor;
     if (bHasTexture != 0)
         baseColor *= txDiffuse.Sample(samLinear, i.vTexCoord);
-    if (baseColor.a < 0.3)
-        discard;
+    baseColor.a = baseColor.a > 0.95f ? 1.0f
+                : ( vMotionJitter.w > 0.5f ) ? ( baseColor.a >= 0.5f ? 1.0f : 0.0f )
+                : InterleavedGradientNoise( i.vPosition.xy ) * baseColor.a;
+    if ( baseColor.a < 0.2f ) discard;
+    baseColor.a = 1.0f;
+    // cutout replaced by dither test above
+    // discard handled above
     float3 crossN = cross(ddx(i.vWorldPos.xyz), ddy(i.vWorldPos.xyz));
     float3 toCam = mViewInv[3].xyz - i.vWorldPos.xyz;
     float3 normal = dot(crossN, crossN) > 1e-12f ? normalize(crossN) : (dot(toCam, toCam) > 1e-12f ? normalize(toCam) : float3(0.0f, 0.0f, 1.0f));

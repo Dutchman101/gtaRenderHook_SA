@@ -36,6 +36,8 @@ public:
         Returns shader byte-code blob.
     */
     ID3DBlob* getBlob() { return m_pBlob; }
+    bool IsValid() const { return m_pShaderDC != nullptr; }
+    static void InvalidateStateCache();
 public:
     /*!
         Compiles shader with custom entry point and shader model

@@ -18,14 +18,25 @@ float3 WorldToClipPos(float3 position)
 // jumps by a whole texel when the jitter changes flips the whole surface between SSR and the fallback.
 
 // view depth at uv; depth is packed into two 8-bit channels, so decode the four texels first and blend after
-float SSRSampleDepth(Texture2D NormalDepth, float2 uv)
+float SSRSampleDepth(Texture2D NormalDepth, SamplerState Sampler, float2 uv, float2 Size)
 {
-    float2 Size;
-    NormalDepth.GetDimensions(Size.x, Size.y);
+    // Size provided by caller
+    // NormalDepth.GetDimensions hoisted to SSR()
     float2 Pos = uv * Size - 0.5f;
     int2 Texel = int2(floor(Pos));
     float2 Blend = Pos - Texel;
-    float Depth[4];
+    float4 Depth;
+#if defined(FEATURE_LEVEL) && FEATURE_LEVEL >= 0xb000
+    float2 gatherUV = (float2(Texel) + 1.0f) / Size;
+    float4 encZ = NormalDepth.GatherBlue(Sampler, gatherUV);
+    float4 encW = NormalDepth.GatherAlpha(Sampler, gatherUV);
+    float4 rawD = float4(
+        DecodeFloatRG(float2(encZ.w, encW.w)),
+        DecodeFloatRG(float2(encZ.z, encW.z)),
+        DecodeFloatRG(float2(encZ.x, encW.x)),
+        DecodeFloatRG(float2(encZ.y, encW.y)));
+    Depth = rawD <= 0.0f ? fFarClip.xxxx : rawD;
+#else
     [unroll]
     for (int k = 0; k < 4; k++)
     {
@@ -33,7 +44,9 @@ float SSRSampleDepth(Texture2D NormalDepth, float2 uv)
         float d = DecodeFloatRG(NormalDepth.Load(int3(t, 0)).zw);
         Depth[k] = d <= 0 ? fFarClip : d;
     }
-    return lerp(lerp(Depth[0], Depth[1], Blend.x), lerp(Depth[2], Depth[3], Blend.x), Blend.y);
+#endif
+    float2 horiz = lerp(Depth.xz, Depth.yw, Blend.x);
+    return lerp(horiz.x, horiz.y, Blend.y);
 }
 
 // DepthToWorldPos, but with this frame's projection offset (the jitter) taken into account
@@ -45,7 +58,7 @@ float3 SSRDepthToWorldPos(float depth, float2 uv)
 }
 
 float3 SSR(Texture2D ScreenTexture, Texture2D NormalDepth,
-            SamplerState Sampler, float3 WorldPos, float3 ReflectDir, float Roughness, out float Fallback)
+            SamplerState Sampler, float3 WorldPos, float3 ReflectDir, float Roughness, out float Fallback, bool bUsePrevFrameOffset = true)
 {
     float3 HitPointWorldPos = 0;
     float3 ClipSpacePos = 0;
@@ -53,17 +66,19 @@ float3 SSR(Texture2D ScreenTexture, Texture2D NormalDepth,
     float StepScaling = 1.0f;
     Fallback = 0.0;
     float found = 1.0f;
+    float2 Size;
+    NormalDepth.GetDimensions(Size.x, Size.y);
     for (int i = 0; i < SSR_SAMPLE_COUNT; i++)
     {
         HitPointWorldPos = WorldPos + ReflectDir * L;
 
         ClipSpacePos = WorldToClipPos(HitPointWorldPos);
-        if (ClipSpacePos.x < 0 || ClipSpacePos.x > 1 || ClipSpacePos.y < 0 || ClipSpacePos.y > 1)
+        if (ClipSpacePos.x < 0 || ClipSpacePos.x > 1 || ClipSpacePos.y < 0 || ClipSpacePos.y > 1 || ClipSpacePos.z <= 0 || ClipSpacePos.z >= fFarClip)
         {
             Fallback = 1.0;
             return float3(0, 0, 0);
         }
-        float3 RestoredWorldPos = SSRDepthToWorldPos(SSRSampleDepth(NormalDepth, ClipSpacePos.xy), ClipSpacePos.xy);
+        float3 RestoredWorldPos = SSRDepthToWorldPos(SSRSampleDepth(NormalDepth, Sampler, ClipSpacePos.xy, Size), ClipSpacePos.xy);
 
         L = length(WorldPos - RestoredWorldPos);
         if (L < fSSRStep * 1.5f)
@@ -86,6 +101,6 @@ float3 SSR(Texture2D ScreenTexture, Texture2D NormalDepth,
                    saturate(max(1 - ClipSpacePos.x + ScreenEdgeBlend, 0) / ScreenEdgeBlend * 0.25) *
                    saturate(max(1 - ClipSpacePos.y + ScreenEdgeBlend, 0) / ScreenEdgeBlend * 0.25);
     Fallback = 1 - Error0 * Error1 * found;
-    float3 refsample = ScreenTexture.SampleLevel(Sampler, ClipSpacePos.xy + vSSRPrevFrameOffset, 0).rgb;
+    float3 refsample = ScreenTexture.SampleLevel(Sampler, saturate(ClipSpacePos.xy + (bUsePrevFrameOffset ? vSSRPrevFrameOffset : 0.0f)), 0).rgb;
     return refsample; //* error0 * error1;
 }

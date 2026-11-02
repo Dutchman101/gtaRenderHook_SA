@@ -24,6 +24,7 @@ public:
         Clears ped weapon list.
     */
     static void ClearWeaponPedsList();
+    static RpAtomic* RenderAlphaAtomic( RpAtomic *atomic, int fadeAlpha );
     /*!
         Injects methods in memory.
     */

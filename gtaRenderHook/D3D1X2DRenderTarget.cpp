@@ -8,7 +8,7 @@
 #include "D3DRenderer.h"
 
 CD3D1X2DRenderTarget::CD3D1X2DRenderTarget( RwRaster* parent ) :
-    CD3D1X2DTexture( parent, D3D11_BIND_RENDER_TARGET, "2DRenderTargetTexture", false, true, true )
+    CD3D1X2DTexture( parent, static_cast<D3D11_BIND_FLAG>( D3D11_BIND_RENDER_TARGET | ( GET_D3D_FEATURE_LVL >= D3D_FEATURE_LEVEL_11_0 ? D3D11_BIND_UNORDERED_ACCESS : 0 ) ), "2DRenderTargetTexture", false, true, true )
 {
     RwD3D1XRaster* d3dRaster = GetD3D1XRaster( m_pParent );
     ID3D11Device* dev = GET_D3D_DEVICE;

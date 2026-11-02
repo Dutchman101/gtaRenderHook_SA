@@ -12,6 +12,8 @@
 #include <cstring>
 #include <d3dcompiler.h>
 #include <fstream>
+#include <algorithm>
+#include <filesystem>
 #include <iterator>
 
 
@@ -89,6 +91,27 @@ static HRESULT CompileShaderCached( const std::string &fileName, const D3D_SHADE
     char name[32];
     sprintf_s( name, "%016llx.cso", hash );
     CreateDirectoryA( "shaders/cache", nullptr );
+    // PruneShaderCache: cap shaders/cache/*.cso at 256 files once per process
+    static bool s_cachePruned = false;
+    if ( !s_cachePruned )
+    {
+        s_cachePruned = true;
+        std::error_code ec;
+        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> cacheFiles;
+        for ( const auto &entry : std::filesystem::directory_iterator( "shaders/cache", ec ) )
+        {
+            if ( !ec && entry.is_regular_file( ec ) && entry.path().extension() == ".cso" )
+                cacheFiles.emplace_back( entry.last_write_time( ec ), entry.path() );
+        }
+        const size_t kMaxCacheFiles = 256;
+        if ( cacheFiles.size() > kMaxCacheFiles )
+        {
+            std::sort( cacheFiles.begin(), cacheFiles.end(),
+                       []( const auto &a, const auto &b ) { return a.first < b.first; } );
+            for ( size_t i = 0; i < cacheFiles.size() - kMaxCacheFiles; ++i )
+                std::filesystem::remove( cacheFiles[i].second, ec );
+        }
+    }
     const std::string cachePath = std::string( "shaders/cache/" ) + name;
     const std::wstring wideCachePath( cachePath.begin(), cachePath.end() );
 
@@ -184,6 +207,16 @@ CD3D1XComputeShader * CD3D1XComputeShader::m_pLastShader  = nullptr;
 CD3D1XGeometryShader *CD3D1XGeometryShader::m_pLastShader = nullptr;
 CD3D1XHullShader *    CD3D1XHullShader::m_pLastShader     = nullptr;
 CD3D1XDomainShader *  CD3D1XDomainShader::m_pLastShader   = nullptr;
+
+void CD3D1XShader::InvalidateStateCache()
+{
+    CD3D1XVertexShader::m_pLastShader   = nullptr;
+    CD3D1XPixelShader::m_pLastShader    = nullptr;
+    CD3D1XComputeShader::m_pLastShader  = nullptr;
+    CD3D1XGeometryShader::m_pLastShader = nullptr;
+    CD3D1XHullShader::m_pLastShader     = nullptr;
+    CD3D1XDomainShader::m_pLastShader   = nullptr;
+}
 
 #pragma region Vertex Shader
 
@@ -314,11 +347,20 @@ void CD3D1XPixelShader::Reload( CD3D1XShaderDefineList *localShaderDefineList )
     if ( m_pShaderDC )
     {
         m_pShaderDC->Release();
-        m_pShaderDC = pShader;
+        m_pShaderDC = nullptr;
+    }
+    m_pShaderDC = pShader;
+    if ( m_pLastShader == this )
+    {
+        m_pLastShader = nullptr;
     }
     if ( m_pBlob )
     {
         m_pBlob->Release();
+        m_pBlob = nullptr;
+    }
+    if ( pBlob )
+    {
         m_pBlob = pBlob;
     }
 }

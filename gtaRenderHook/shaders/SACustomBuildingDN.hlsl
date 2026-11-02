@@ -171,7 +171,8 @@ float4 PS(PS_DEFERRED_DN_IN i) : SV_Target
     outColor.rgb =
         CalculateFogColor( outColor.rgb, ViewDir, LightDir, i.vNormalDepth.w,
                            WorldPos.z, FullScattering );
-    outColor.a = albedoSample.a * i.vColor.a;
+    float vertAlpha = ( fAlphaMipCoverage < 0.0f ) ? 1.0f : i.vColor.a;
+    outColor.a = albedoSample.a * vertAlpha;
 
     return outColor;
 }
@@ -210,8 +211,10 @@ PS_DEFERRED_OUT DeferredPS(PS_DEFERRED_DN_IN i)
 {
     PS_DEFERRED_OUT Out;
     float4 baseColor = cDiffuseColor;
+    float4 texColor = bHasTexture != 0 ? txDiffuse.Sample(samLinear, i.vTexCoord.xy) : 1.0f;
     if (bHasTexture != 0)
-        baseColor *= txDiffuse.Sample(samLinear, i.vTexCoord.xy);
+        baseColor *= texColor;
+
     
     float4 params = bHasSpecTex > 0 ? float4(txSpec.Sample(samLinear, i.vTexCoord.xy).xyz, 3) : float4(fSpecularIntensity, fGlossiness, 0, 3);
     params.w = baseColor.a > 0.95f ? 3 : 5;
@@ -219,17 +222,19 @@ PS_DEFERRED_OUT DeferredPS(PS_DEFERRED_DN_IN i)
     {
         // dual pass: alpha test instead of dithering; the blended pass draws the texels below the cutoff. Without
         // blended edges, alpha rises with the mip level: lower mips average the leaves away
-        float alpha = baseColor.a;
+        float alpha = texColor.a;
         if ( fAlphaMipCoverage > 0 && bHasTexture != 0 )
+#if defined(FEATURE_LEVEL) && FEATURE_LEVEL >= 0xa100
             alpha *= 1.0f + max( txDiffuse.CalculateLevelOfDetail( samLinear, i.vTexCoord.xy ), 0.0f ) * fAlphaMipCoverage;
+#endif
         if ( alpha < fAlphaCutoff )
             discard;
-        baseColor.a = 1.0f;
+        baseColor.a = cDiffuseColor.a > 0.95f ? 1.0f : InterleavedGradientNoise(i.vPosition.xy) * cDiffuseColor.a;
     }
     else
         // screen-door under RenderHook's TAA; cut out at 0.5 under an external TAA (DLAA keeps the pattern)
         baseColor.a = baseColor.a > 0.95f ? baseColor.a
-                    : vMotionJitter.w > 0.5f ? ( baseColor.a >= 0.5f ? 1.0f : 0.0f )
+                    : ( vMotionJitter.w > 0.5f && cDiffuseColor.a > 0.95f ) ? ( baseColor.a >= 0.5f ? 1.0f : 0.0f )
                     : InterleavedGradientNoise(i.vPosition.xy) * baseColor.a;
     float3 normal = i.vNormalDepth.xyz;
     if ( bHasNormalTex > 0 && length( i.vTangent.xyz ) > 0 )
