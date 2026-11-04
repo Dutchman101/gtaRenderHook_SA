@@ -48,7 +48,7 @@ class CloudRenderingSettingsBlock : public SettingsBlock
     {
         m_sName = "CloudRendering";
         m_aFields["EnableCloudRendering"] =
-            new ToggleSField( "EnableCloudRendering", false, false, false, m_sName, true );
+            new ToggleSField( "EnableCloudRendering", false, false, false, m_sName, false );
         m_aFields["CloudStartHeight"] =
             new FloatSField( "CloudStartHeight", false, false, false, m_sName,
                              200.0f, 0.0f, 10000.0f, 1.f );

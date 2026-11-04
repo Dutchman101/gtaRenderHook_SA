@@ -2,7 +2,7 @@
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "stdafx.h"
 #include "CVisibilityPluginsRH.h"
-#include "D3D1XBasePipeline.h"
+#include "DeferredRenderer.h"
 #include "Renderer.h"
 #include <game_sa\CPed.h>
 #include <game_sa\common.h>

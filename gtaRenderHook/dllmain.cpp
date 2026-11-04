@@ -2,7 +2,6 @@
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "CDebug.h"
 //#include "RwRenderEngine.h"
-//#include "RwVulkanEngine.h"
 #include "RwD3D1XEngine.h"
 #include "SAIdleHook.h"
 #include "CustomBuildingPipeline.h"

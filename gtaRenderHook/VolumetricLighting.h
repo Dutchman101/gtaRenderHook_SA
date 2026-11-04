@@ -54,7 +54,7 @@ public:
         m_aFields["EnableVolumetricLighting"] = new ToggleSField( "EnableVolumetricLighting", false, false, false, m_sName, true );
         m_aFields["RaymarchingDistance"] = new FloatSField( "RaymarchingDistance", false, false, false, m_sName, 40.0f, 1.0f, 1000.0f, 0.5f );
         m_aFields["SunlightBlendOffset"] = new FloatSField( "SunlightBlendOffset", false, false, false, m_sName, 0.25f, -1.0f, 1.0f, 0.01f );
-        m_aFields["SunlightIntensity"] = new FloatSField( "SunlightIntensity", false, false, false, m_sName, 0.25f, 0.001f, 5.0f, 0.001f );
+        m_aFields["SunlightIntensity"] = new FloatSField( "SunlightIntensity", false, false, false, m_sName, 0.10f, 0.001f, 5.0f, 0.001f );
         m_aFields["VolumetricRenderingScale"] = new FloatSField( "VolumetricRenderingScale", false, false, false, m_sName, 0.95f, 0.25f, 1.0f, 0.01f );
         m_aFields["SunlightRaymarchingSteps"] = new UIntSField( "SunlightRaymarchingSteps", false, false, false, m_sName, 16, 2, 256 );
         Reset();

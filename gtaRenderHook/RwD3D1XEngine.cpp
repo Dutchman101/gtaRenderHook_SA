@@ -840,24 +840,41 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
     g_pRenderBuffersMgr->UpdateViewProjMatricles( *(RwMatrix*)viewTransformRef, *(RwMatrix*)projTransformRef );
 
     // resize main framebuffer if adapter mode changed
-    RECT rc;
-    GetClientRect( m_pRenderer->getHWND(), &rc );
+    bool bResized = false;
+    // compare adapter mode dimensions against renderer and camera raster dimensions
     DXGI_MODE_DESC currModeDesc = m_pRenderer->getCurrentAdapterModeDesc();
     if ( camera->frameBuffer && RwRasterGetType( camera->frameBuffer ) != rwRASTERTYPECAMERATEXTURE )
     {
         // If we have different client window sizes we must resize it.
-        if ( static_cast<UINT>( rc.right ) != currModeDesc.Width || static_cast<UINT>( rc.bottom ) != currModeDesc.Height )
+        if ( m_pRenderer->getWidth() != currModeDesc.Width || m_pRenderer->getHeight() != currModeDesc.Height )
         {
             auto swapChain = m_pRenderer->getSwapChain();
+            m_pRenderer->setSize( currModeDesc.Width, currModeDesc.Height );
             g_pStateMgr->SetScreenSize( static_cast<float>( currModeDesc.Width ), static_cast<float>( currModeDesc.Height ) );
-            m_pRastersToReload.push_back( camera->zBuffer );
+            if ( camera->zBuffer )
+            {
+                camera->zBuffer->width  = currModeDesc.Width;
+                camera->zBuffer->height = currModeDesc.Height;
+                m_pRastersToReload.push_back( camera->zBuffer );
+            }
+            RsGlobal.maximumWidth  = currModeDesc.Width;
+            RsGlobal.maximumHeight = currModeDesc.Height;
+#ifdef USE_ANTTWEAKBAR
+            TwWindowSize( currModeDesc.Width, currModeDesc.Height );
+#endif
             RwRasterDestroy( camera->frameBuffer );
             swapChain->ResizeTarget( &currModeDesc );
             swapChain->ResizeBuffers( 1, currModeDesc.Width, currModeDesc.Height, currModeDesc.Format, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH );
             camera->frameBuffer = RwRasterCreate( currModeDesc.Width, currModeDesc.Height, 32, rwRASTERDONTALLOCATE | rwRASTERTYPECAMERA );
             m_bScreenSizeChanged = true;
+            bResized             = true;
 
-            SetWindowPos( m_pRenderer->getHWND(), nullptr, 0, 0, currModeDesc.Width, currModeDesc.Height, SWP_NOMOVE | SWP_NOZORDER );
+            if ( gDebugSettings.GetToggleField( "Windowed" ) )
+            {
+                SetWindowLongPtr( m_pRenderer->getHWND(), GWL_STYLE, WS_POPUP | WS_VISIBLE );
+                SetWindowLongPtr( m_pRenderer->getHWND(), GWL_EXSTYLE, 0 );
+            }
+            SetWindowPos( m_pRenderer->getHWND(), nullptr, 0, 0, currModeDesc.Width, currModeDesc.Height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED );
         }
         if ( m_bScreenSizeChanged )
             ReloadTextures();
@@ -869,6 +886,11 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
     }
 
     m_pRenderer->BeginUpdate( camera );
+    if ( bResized && camera->zBuffer )
+    {
+        RwRGBA clearCol = { 0, 0, 0, 255 };
+        m_pRenderer->Clear( camera, clearCol, rwCAMERACLEARZ | rwCAMERACLEARSTENCIL );
+    }
     return true;
 }
 
@@ -1397,7 +1419,10 @@ void CRwD3D1XEngine::SetTexture( RwTexture * tex, int Stage )
 {
     if ( tex == nullptr )
     {
-        g_pStateMgr->SetRaster( nullptr );
+        if ( Stage == 0 )
+            g_pStateMgr->SetRaster( nullptr );
+        else
+            g_pStateMgr->SetRaster( nullptr, Stage );
         return;
     }
     if ( Stage == 0 )
@@ -1408,7 +1433,10 @@ void CRwD3D1XEngine::SetTexture( RwTexture * tex, int Stage )
         g_pStateMgr->SetTextureAnisotropy( RpAnisotTextureGetMaxAnisotropy( tex ) );
     }
     auto raster = RwTextureGetRaster( tex );
-    g_pStateMgr->SetRaster( raster );
+    if ( Stage == 0 )
+        g_pStateMgr->SetRaster( raster );
+    else
+        g_pStateMgr->SetRaster( raster, Stage );
 }
 
 bool CRwD3D1XEngine::SkinAllInOneNode( RxPipelineNode * self, const RxPipelineNodeParam * params )

@@ -276,37 +276,6 @@ struct AlphaMesh
     void *          atomic = nullptr;
 };
 
-#ifdef RENDER_VK_ENGINE
-struct RwVulkanRasterData
-{
-    VkImage        vkImg;
-    VkImageView    vkImgView;
-    VkDeviceMemory memory;
-    VkSampler      vkSampler;
-};
-
-struct RwVulkanRaster
-{
-    RwVulkanRasterData *texture;
-    unsigned char *     palette;
-    unsigned char       alpha;
-    unsigned char       cubeTextureFlags; /* 0x01 IS_CUBEMAP_TEX */
-    unsigned char       textureFlags;     /* 0x01 HAS_MIP_MAPS
-                                          0x10 IS_COMPRESSED */
-    unsigned char   lockFlags;
-    VkImageView *   lockedSurface;
-    D3DLOCKED_RECT  lockedRect;
-    VkFormat        format;
-    VkSwapchainKHR *swapChain;
-    HWND *          hwnd;
-};
-struct _rwVKRaster
-{
-    RwRaster       r;
-    RwVulkanRaster dr;
-};
-#endif
-
 /*
  *	Global Variables
  */
@@ -522,7 +491,6 @@ struct _rwVKRaster
     *(RpHAnimHierarchy **)( (UINT)atomic + RpSkinGlobals._atomicSkinOffset )
 
 #define GetD3D9Raster( r ) ( &( (_rwD3DRaster *)r )->dr )
-#define GetVKRaster( r ) ( &( (_rwVKRaster *)r )->dr )
 #define GetD3D1XRaster( r ) ( &( (_rwD3D1XRaster *)r )->dr )
 
 #endif

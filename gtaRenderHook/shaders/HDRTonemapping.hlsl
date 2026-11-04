@@ -70,6 +70,7 @@ float4 TonemapPS(PS_QUAD_IN i) : SV_Target
     }
 
 	float AvgLogLum = txAvgLogLum.Load(int3(0, 0, 0)).r;
+    AvgLogLum = (AvgLogLum <= 0.01f || isnan(AvgLogLum)) ? 0.5f : clamp(AvgLogLum, 0.35f, 1.0f);
     float3 ScreenColor = txInputRaster.Sample(samLinear, i.vTexCoord.xy).rgb;
     float Luminance = GetLuminance(ScreenColor);
     float3 White = float3(1, 1, 1);    
@@ -173,7 +174,9 @@ float4 AdaptationPassPS(PS_QUAD_IN i) : SV_TARGET
     // 60 fps rate. This is not an accurate model of human adaptation, which can
     // take longer than half an hour.
     // Going to make this more adjustable, e.g. add rate param
-    float NewAdaptation = AdaptedLum + (CurrentLum - AdaptedLum) * (1 - pow(0.95f, 60 * 0.01f));
+    AdaptedLum = (AdaptedLum <= 0.01f || isnan(AdaptedLum)) ? 0.5f : clamp(AdaptedLum, 0.35f, 1.0f);
+    CurrentLum = (CurrentLum <= 0.01f || isnan(CurrentLum)) ? 0.5f : clamp(CurrentLum, 0.35f, 1.0f);
+    float NewAdaptation = clamp(AdaptedLum + (CurrentLum - AdaptedLum) * (1 - pow(0.95f, 60 * 0.01f)), 0.35f, 1.0f);
     return float4(NewAdaptation, NewAdaptation, NewAdaptation, 1.0f);
 }
 

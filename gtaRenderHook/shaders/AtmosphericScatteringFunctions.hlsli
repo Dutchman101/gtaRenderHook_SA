@@ -13,7 +13,7 @@ static const float g_fThickAtmosphereHeight = 1200.0f;
 */
 inline float GetRayleighDensity(float Height)
 {
-    return exp(-Height / g_fAtmosphereHeight);
+    return exp(-max(Height, 0.0f) / g_fAtmosphereHeight);
 }
 
 /*!
@@ -21,7 +21,7 @@ inline float GetRayleighDensity(float Height)
 */
 inline float GetMieDensity(float Height)
 {
-    return exp(-Height / g_fThickAtmosphereHeight);
+    return exp(-max(Height, 0.0f) / g_fThickAtmosphereHeight);
 }
 
 float3 CalculateRayleighScattering(float CosSqPlOne, float Height)

@@ -2,6 +2,13 @@
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "SettingsHolder.h"
 #include "D3D1XShader.h"
+#include "D3D1XStateManager.h"
+#include "RwRenderEngine.h"
+#include "RwD3D1XEngine.h"
+#include "D3DRenderer.h"
+#pragma warning( push, 0 )
+#include <game_sa\CScene.h>
+#pragma warning( pop )
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -81,7 +88,9 @@ void SettingsHolder::InitGUI()
     if ( m_pGuiholder != nullptr )
         return;
     // Init new settings bar
+    TwDefine( " GLOBAL iconpos=topleft " );
     m_pGuiholder = TwNewBar( "Settings" );
+    TwDefine( " Settings label='RenderHook Settings (F12)' position='16 16' size='260 360' iconified=true " );
     // Init each settings block
     for ( auto block : m_aSettingsBlocks )
         block->InitGUI( m_pGuiholder );
@@ -92,9 +101,20 @@ void SettingsHolder::InitGUI()
 
 void SettingsHolder::DrawGUI()
 {
-    if ( !m_bDrawTweakBar ) return;
+    if ( m_pGuiholder == nullptr ) return;
 
     TwDraw();
+    if ( g_pStateMgr )
+    {
+        CD3D1XShader::InvalidateStateCache();
+        g_pStateMgr->InvalidateStateCache();
+        if ( Scene.m_pRwCamera && Scene.m_pRwCamera->frameBuffer )
+        {
+            auto dxEngine = static_cast<CRwD3D1XEngine*>( g_pRwCustomEngine );
+            if ( dxEngine && dxEngine->getRenderer() )
+                dxEngine->getRenderer()->BeginUpdate( Scene.m_pRwCamera );
+        }
+    }
 }
 
 bool SettingsHolder::IsGUIEnabled()
@@ -104,12 +124,23 @@ bool SettingsHolder::IsGUIEnabled()
 
 void SettingsHolder::EnableGUI()
 {
-    m_bDrawTweakBar = true;
+    if ( !m_bDrawTweakBar )
+    {
+        m_bDrawTweakBar = true;
+        if ( m_pGuiholder != nullptr )
+            TwDefine( " Settings iconified=false " );
+    }
 }
 
 void SettingsHolder::DisableGUI()
 {
-    m_bDrawTweakBar = false;
+    if ( m_bDrawTweakBar )
+    {
+        m_bDrawTweakBar = false;
+        if ( m_pGuiholder != nullptr )
+            TwDefine( " Settings iconified=true " );
+        ReleaseCapture();
+    }
 }
 
 void DebugSettingsBlock::Reset()
@@ -123,7 +154,7 @@ void DebugSettingsBlock::InitGUI( TwBar * guiholder )
     SettingsBlock::InitGUI( guiholder );
     std::string rtIdSettings = "min=0 max=";
     TwAddVarRW( guiholder, "RenderTarget ID", TwType::TW_TYPE_UINT32, &DebugRenderTargetNumber,
-        ( rtIdSettings + std::to_string( DebugRenderTargetList.size() - 1 ) + " group=Debug" ).c_str() );
+        ( rtIdSettings + std::to_string( DebugRenderTargetList.empty() ? 0 : ( DebugRenderTargetList.size() - 1 ) ) + " group=Debug" ).c_str() );
 }
 
 tinyxml2::XMLElement * SettingsBlock::Save( tinyxml2::XMLDocument * doc )

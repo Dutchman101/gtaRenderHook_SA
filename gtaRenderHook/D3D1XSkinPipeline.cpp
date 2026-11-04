@@ -181,6 +181,7 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
         model = &GetModelsData( entryData )[i];
         material = model->material;
         alphaBlend = material->color.alpha != 255 || model->vertexAlpha;
+        bool bHasSpecTex = false;
         // set texture
         if ( material->texture && material->texture->raster )
         {
@@ -194,15 +195,23 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
 
             // set physically based shading material params
             // TODO: add a method for material initialization
-            CPBSMaterial* mat = CPBSMaterialMgr::materials[material->texture->name];
-            if ( mat != nullptr )
+            CPBSMaterial* mat = ( m_uiDeferredStage != 2 ) ? CPBSMaterialMgr::FindMaterial( material->texture->name ) : nullptr;
+            if ( mat != nullptr && mat->m_tSpecRoughness != nullptr && mat->m_tSpecRoughness->raster != nullptr )
             {
                 g_pStateMgr->SetRaster( mat->m_tSpecRoughness->raster, 1 );
 
                 g_pRenderBuffersMgr->UpdateHasSpecTex( 1 );
+                bHasSpecTex = true;
             }
             else
-                g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
+                (void)0;
+        }
+        else
+        {
+            g_pRwCustomEngine->SetTexture( nullptr, 0 );
+            g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( material->color );
+            g_pRenderBuffersMgr->UpdateMaterialGlossiness( 0.1f );
+            g_pRenderBuffersMgr->UpdateMaterialSpecularInt( 0.2f );
         }
         // set alpha blending
         g_pStateMgr->SetAlphaBlendEnable( m_uiDeferredStage == 1 ? FALSE : alphaBlend > 0 );
@@ -210,6 +219,10 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
         g_pRenderBuffersMgr->FlushMaterialBuffer();
         g_pStateMgr->FlushStates();
         GET_D3D_RENDERER->DrawIndexed( model->numIndex, model->startIndex, model->minVert );
+        if ( bHasSpecTex )
+            g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
+        if ( bHasSpecTex )
+            g_pStateMgr->SetRaster( nullptr, 1 );
     }
 }
 

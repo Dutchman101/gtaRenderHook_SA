@@ -85,7 +85,7 @@ void CVolumetricLighting::RenderVolumetricEffects( RwRaster *normalsDepth,
     m_pVolumetricSunlightPS->Set();
     CFullscreenQuad::Draw();
     // Than combine them with
-    g_pRwCustomEngine->SetRenderTargets( &to, Scene.m_pRwCamera->zBuffer, 1 );
+    g_pRwCustomEngine->SetRenderTargets( &to, nullptr, 1 );
     g_pStateMgr->FlushRenderTargets();
     g_pStateMgr->SetRaster( from );
     g_pStateMgr->SetRaster( m_pVolumeLightingRaster, 2 );

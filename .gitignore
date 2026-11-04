@@ -247,13 +247,6 @@ ModelManifest.xml
 /latex
 /rtf
 /Activity1.nvact
-/RHEngineLib/Common/SmartCOMPtr.h
-/RHEngineLib/html
-/RHEngineLib/latex
-/RHEngineLib/rtf
-/Tests/TextureLoadingTest/textures
-/Tests/TextureLoadingTest/dump.bin
-/Tests/TextureLoadingTest/dump_orig.bin
 /cmake-build-debug/
 /cmake-build-debug-visual-studio-x64-llvm12/
 /cmake-build-debug-x86/

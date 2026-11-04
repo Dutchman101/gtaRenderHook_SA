@@ -11,18 +11,12 @@
     <Filter Include="Source\RwRenderEngine\RwD3DRenderEngine">
       <UniqueIdentifier>{3509e7da-5322-4441-8bf3-d46f14dd81da}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source\RwRenderEngine\RwVulkanRenderEngine">
-      <UniqueIdentifier>{975ba31d-719a-4309-a2a9-25da573cb587}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Source\Headers">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;hm;inl;inc;xsd</Extensions>
     </Filter>
     <Filter Include="Source\Headers\Utils">
       <UniqueIdentifier>{156b086c-e99f-4640-9660-4562cbb8e9a5}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Source\RwRenderEngine\RwVulkanRenderEngine\GTAPipelines">
-      <UniqueIdentifier>{9b9676ce-9780-4009-bf44-9d4ab68ea990}</UniqueIdentifier>
     </Filter>
     <Filter Include="Source\RwRenderEngine\RwD3DRenderEngine\Helpers">
       <UniqueIdentifier>{e2d1b967-07d7-46e9-ae95-c78d85808533}</UniqueIdentifier>
@@ -338,12 +332,6 @@
     <ClInclude Include="D3D1X3DTexture.h">
       <Filter>Source\RwRenderEngine\RwD3DRenderEngine\BasicClasses\Textures</Filter>
     </ClInclude>
-    <ClInclude Include="FastNoiseSIMD.h">
-      <Filter>Source\Utilities</Filter>
-    </ClInclude>
-    <ClInclude Include="FastNoiseSIMD_internal.h">
-      <Filter>Source\Utilities</Filter>
-    </ClInclude>
     <ClInclude Include="CloudRendering.h">
       <Filter>Source\Algorithms\Lighting</Filter>
     </ClInclude>
@@ -577,27 +565,6 @@
     <ClCompile Include="D3D1X3DTexture.cpp">
       <Filter>Source\RwRenderEngine\RwD3DRenderEngine\BasicClasses\Textures</Filter>
     </ClCompile>
-    <ClCompile Include="FastNoiseSIMD.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="FastNoiseSIMD_neon.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="FastNoiseSIMD_sse2.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="FastNoiseSIMD_sse41.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="FastNoiseSIMD_avx2.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="FastNoiseSIMD_avx512.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
-    <ClCompile Include="FastNoiseSIMD_internal.cpp">
-      <Filter>Source\Utilities</Filter>
-    </ClCompile>
     <ClCompile Include="CloudRendering.cpp">
       <Filter>Source\Algorithms\Lighting</Filter>
     </ClCompile>
@@ -707,7 +674,6 @@
     <None Include="shaders\TemporalAA.hlsl">
       <Filter>Source\Shaders</Filter>
     </None>
-    <None Include="gtaRenderHook.ruleset" />
     <None Include="shaders\CloudRendering.hlsl" />
   </ItemGroup>
   <ItemGroup>

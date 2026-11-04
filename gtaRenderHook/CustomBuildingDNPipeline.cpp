@@ -171,6 +171,8 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
         const RwUInt8 effectiveAlpha =
             ( m_uiDeferredStage == 1 && CRendererRH::FadingPass ) ? 255 : mesh.material->color.alpha;
         bAlphaEnable |= effectiveAlpha != 255 || vertexAlpha;
+        bool bHasSpecTex   = false;
+        bool bHasNormalTex = false;
 
         if ( mesh.material->texture && mesh.material->texture->raster )
         {
@@ -181,15 +183,17 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
             if ( m_uiDeferredStage != 2 )
             {
                 CPBSMaterial *mat =
-                    CPBSMaterialMgr::materials[mesh.material->texture->name];
-                if ( mat != nullptr )
+                    CPBSMaterialMgr::FindMaterial( mesh.material->texture->name );
+                if ( mat != nullptr && mat->m_tSpecRoughness != nullptr && mat->m_tSpecRoughness->raster != nullptr )
                 {
                     g_pStateMgr->SetRaster( mat->m_tSpecRoughness->raster, 1 );
                     g_pRenderBuffersMgr->UpdateHasSpecTex( 1 );
-                    if ( mat->m_tNormals )
+                    bHasSpecTex = true;
+                    if ( mat->m_tNormals != nullptr && mat->m_tNormals->raster != nullptr )
                     {
                         g_pStateMgr->SetRaster( mat->m_tNormals->raster, 2 );
                         g_pRenderBuffersMgr->UpdateHasNormalTex( 1 );
+                        bHasNormalTex = true;
                     }
                 }
             }
@@ -216,6 +220,19 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
                 m_aAlphaMeshList.Push(
                     {entryData, ltm, (int)i, dualPass ? ALPHA_MESH_DUAL_PASS : 0, atomic} );
                 if ( !dualPass )
+                {
+                    if ( bHasSpecTex )
+                    {
+                        g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
+                        g_pStateMgr->SetRaster( nullptr, 1 );
+                    }
+                    if ( bHasNormalTex )
+                    {
+                        g_pRenderBuffersMgr->UpdateHasNormalTex( 0 );
+                        g_pStateMgr->SetRaster( nullptr, 2 );
+                    }
+                }
+                if ( !dualPass )
                     continue;
             }
             g_pStateMgr->SetAlphaBlendEnable( FALSE );
@@ -225,10 +242,14 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
         g_pStateMgr->FlushStates();
         GET_D3D_RENDERER->DrawIndexed( mesh.numIndex, mesh.startIndex,
                                        mesh.minVert );
-        g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
-        g_pRenderBuffersMgr->UpdateHasNormalTex( 0 );
-        g_pRwCustomEngine->SetTexture( nullptr, 1 );
-        g_pRwCustomEngine->SetTexture( nullptr, 2 );
+        if ( bHasSpecTex )
+            g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
+        if ( bHasNormalTex )
+            g_pRenderBuffersMgr->UpdateHasNormalTex( 0 );
+        if ( bHasSpecTex )
+            g_pStateMgr->SetRaster( nullptr, 1 );
+        if ( bHasNormalTex )
+            g_pStateMgr->SetRaster( nullptr, 2 );
     }
 
     if ( m_uiDeferredStage == 3 || m_uiDeferredStage == 4 )

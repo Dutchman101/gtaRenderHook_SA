@@ -110,6 +110,9 @@ public:
        Returns window handle.
      */
     HWND					getHWND() { return m_hWnd; }
+    UINT					getWidth() const { return m_uiWidth; }
+    UINT					getHeight() const { return m_uiHeight; }
+    void					setSize( UINT w, UINT h ) { m_uiWidth = w; m_uiHeight = h; }
     /*!
        Starts debugging event.
      */

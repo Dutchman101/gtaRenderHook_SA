@@ -62,9 +62,9 @@ float3 ComputeSunRaysWithLighting( PS_QUAD_IN i, float3 LightDir,
     float SunBlend = saturate( dot( ViewDir, LightDir ) + SunlightBlendOffset );
     SunBlend       = SunBlend * SunBlend * 2.0;
 
-    float3       SunRayContrib = SunBlend * vSunColor.rgb * vSunColor.a * 0.5f;
-    const float3 RayleighContrib = vSkyLightCol.rgb * 0.25f;
-    const float3 MieContrib      = vHorizonCol.rgb * 0.25f;
+    float3       SunRayContrib = SunBlend * vSunColor.rgb * vSunColor.a * 0.25f * vSunLightDir.w;
+    const float3 RayleighContrib = vSkyLightCol.rgb * 0.15f * vSunLightDir.w;
+    const float3 MieContrib      = vHorizonCol.rgb * 0.15f * vSunLightDir.w;
 
     for ( int index = 0; index < SunRaySampleCount; index++ )
     {
@@ -109,7 +109,7 @@ float4 VolumetricSunlightPS( PS_QUAD_IN i ) : SV_TARGET
         i, LightDir, ViewPos, WorldPos,
         min( length( WorldPos - ViewPos ), RaymarchingDistance ) );
 
-    OutLighting.rgb = SunRays * SunlightIntensity;
+    OutLighting.rgb = SunRays * SunRaysIntensity * vSunLightDir.w;
     OutLighting.a = 1;
 
     return OutLighting;
@@ -120,11 +120,11 @@ float4 VolumetricCombinePS( PS_QUAD_IN i ) : SV_TARGET
     float4 OutLighting;
 
     float4 ScreenColor = txScreen.Sample( samLinear, i.vTexCoord.xy );
-    float  intesity    = saturate(
-        length( txVolumetric.Sample( samLinear, i.vTexCoord.xy ).rgb ) );
-    OutLighting.rgb =
-        lerp( ScreenColor.rgb,
-              txVolumetric.Sample( samLinear, i.vTexCoord.xy ).rgb, intesity );
+    float3 VolumetricColor = txVolumetric.Sample( samLinear, i.vTexCoord.xy ).rgb;
+
+    OutLighting.rgb = ScreenColor.rgb + VolumetricColor / ( 1.0f + VolumetricColor );
+
+
     OutLighting.a = 1;
 
     return OutLighting;

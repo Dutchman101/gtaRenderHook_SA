@@ -244,7 +244,7 @@ static bool CanEntityCastShadow( CEntity *entity )
         return false;
     if ( modelInfo->GetModelType() == ModelInfoType::MODEL_INFO_TIME )
     {
-        CTimeInfo *timeInfo = modelInfo->GetTimeInfo();
+        tTimeInfo *timeInfo = modelInfo->GetTimeInfo();
         if ( timeInfo != nullptr && !CClock::GetIsTimeInRange( timeInfo->m_nTimeOn, timeInfo->m_nTimeOff ) )
             return false;
     }

@@ -1,11 +1,11 @@
 param(
     [string]$GameDir = "",
     [string]$StagingDir = "",
-    [string]$X64BuildDir = "",
-    [string]$X86BuildDir = "",
-    [string]$Config = "RelWithDebInfo",
+    [string]$BuildDir = "",
+    [string]$Config = "Release",
     [switch]$InstallAsiLoader,
     [string]$AsiLoaderPath = "",
+    [switch]$ShadersOnly,
     [switch]$SkipExeHashCheck
 )
 
@@ -20,11 +20,8 @@ if (-not $GameDir) {
 if (-not $StagingDir) {
     $StagingDir = Join-Path $repoParent "build\staging_gtasa"
 }
-if (-not $X64BuildDir) {
-    $X64BuildDir = Join-Path $repoParent "build\vs_x64"
-}
-if (-not $X86BuildDir) {
-    $X86BuildDir = Join-Path $repoParent "build\vs_x86"
+if (-not $BuildDir) {
+    $BuildDir = Join-Path $repoParent "build\vs_x86"
 }
 if (-not $AsiLoaderPath) {
     $AsiLoaderPath = Join-Path $repoParent "build_cache\downloads\ual_winmm\winmm.dll"
@@ -33,19 +30,30 @@ if (-not $AsiLoaderPath) {
 function Get-PeMachine {
     param([Parameter(Mandatory = $true)][string]$FilePath)
 
-    $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-    if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
-        throw "Not a valid PE binary (missing MZ header): $FilePath"
+    $stream = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        if ($stream.Length -lt 64) {
+            throw "Not a valid PE binary (file shorter than 64-byte DOS header): $FilePath"
+        }
+        $dosHeader = New-Object byte[] 64
+        $readDos = $stream.Read($dosHeader, 0, 64)
+        if ($readDos -lt 64 -or $dosHeader[0] -ne 0x4D -or $dosHeader[1] -ne 0x5A) {
+            throw "Not a valid PE binary (missing MZ header): $FilePath"
+        }
+        $peOffset = [System.BitConverter]::ToInt32($dosHeader, 0x3C)
+        if ($peOffset -lt 0 -or ([long]$peOffset + 6) -gt $stream.Length) {
+            throw "Corrupt PE header offset in: $FilePath"
+        }
+        [void]$stream.Seek($peOffset, [System.IO.SeekOrigin]::Begin)
+        $peHeader = New-Object byte[] 6
+        $readPe = $stream.Read($peHeader, 0, 6)
+        if ($readPe -lt 6 -or ([System.BitConverter]::ToUInt32($peHeader, 0) -ne 0x00004550)) {
+            throw "Missing PE\0\0 signature in: $FilePath"
+        }
+        return [System.BitConverter]::ToUInt16($peHeader, 4)
+    } finally {
+        $stream.Dispose()
     }
-    $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
-    if ($peOffset -lt 0 -or ($peOffset + 6) -gt $bytes.Length) {
-        throw "Corrupt PE header offset in: $FilePath"
-    }
-    $peSig = [System.BitConverter]::ToUInt32($bytes, $peOffset)
-    if ($peSig -ne 0x00004550) {
-        throw "Missing PE\0\0 signature in: $FilePath"
-    }
-    return [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
 }
 
 function Resolve-ExistingFile {
@@ -60,9 +68,9 @@ function Resolve-ExistingFile {
         if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
             $item = Get-Item -LiteralPath $candidate
             $existing += [PSCustomObject]@{
-                Path            = $item.FullName
+                Path             = $item.FullName
                 LastWriteTimeUtc = $item.LastWriteTimeUtc
-                Order           = $order
+                Order            = $order
             }
         }
         $order++
@@ -90,19 +98,6 @@ if (-not $SkipExeHashCheck -and ($actualExeSha256 -ne $expectedSa10UsSha256)) {
     throw "Target gta_sa.exe SHA-256 ($actualExeSha256) does not match GTA SA v1.0 US ($expectedSa10UsSha256). Pass -SkipExeHashCheck only if intentional."
 }
 
-# The DirectX 11 ASI (gtaRenderHook.asi) patches overlapping RenderWare/Idle
-# addresses and writes an incompatible shaders/ tree; refuse mixed deployment.
-$conflictingDx11Paths = @(
-    (Join-Path $GameDir "gtaRenderHook.asi"),
-    (Join-Path $GameDir "scripts\gtaRenderHook.asi"),
-    (Join-Path $GameDir "plugins\gtaRenderHook.asi")
-)
-foreach ($conflict in $conflictingDx11Paths) {
-    if (Test-Path -LiteralPath $conflict -PathType Leaf) {
-        throw "Conflicting DirectX 11 plugin detected at '$conflict'. Remove gtaRenderHook.asi before deploying the Vulkan IPC stack."
-    }
-}
-
 # Snapshot retail base-game files so deployment can verify none were touched.
 $protectedRetailFiles = @(
     "gta_sa.exe",
@@ -120,46 +115,60 @@ foreach ($name in $protectedRetailFiles) {
     }
 }
 
-$hookSrc = Resolve-ExistingFile -Label "gta_sa_render_hook.asi (x86)" -Candidates @(
-    (Join-Path $X86BuildDir "gta_sa_render_hook\$Config\gta_sa_render_hook.asi"),
-    (Join-Path $StagingDir "gta_sa_render_hook.asi"),
-    (Join-Path $X86BuildDir "gta_sa_render_hook\gta_sa_render_hook.asi")
-)
-$driverSrc = Resolve-ExistingFile -Label "gta_sa_render_driver.exe (x64)" -Candidates @(
-    (Join-Path $X64BuildDir "gta_sa_render_hook\render_driver\$Config\gta_sa_render_driver.exe"),
-    (Join-Path $StagingDir "gta_sa_render_driver.exe"),
-    (Join-Path $X64BuildDir "gta_sa_render_hook\render_driver\gta_sa_render_driver.exe")
-)
-$glslangCandidates = @(
-    (Join-Path $X64BuildDir "gta_sa_render_hook\render_driver\$Config\glslangValidator.exe"),
-    (Join-Path $StagingDir "glslangValidator.exe")
-)
-if ($env:VULKAN_SDK) {
-    $glslangCandidates += (Join-Path $env:VULKAN_SDK "Bin\glslangValidator.exe")
-}
-$glslangSrc = Resolve-ExistingFile -Label "glslangValidator.exe (x64)" -Candidates $glslangCandidates
-
-$shadersSrc = Join-Path $repoRoot "shaders"
-$resourcesSrc = Join-Path $repoRoot "rw_rh_engine_lib\resources"
-$blueNoiseSrc = Join-Path $resourcesSrc "blue_noise.bmp"
+$shadersSrc = Join-Path $repoRoot "gtaRenderHook\shaders"
 if (-not (Test-Path -LiteralPath $shadersSrc -PathType Container)) {
-    throw "Shader source directory missing: $shadersSrc"
-}
-if (-not (Test-Path -LiteralPath $blueNoiseSrc -PathType Leaf)) {
-    throw "Runtime resource missing: $blueNoiseSrc"
+    throw "DirectX 11 shader source directory missing: $shadersSrc"
 }
 
-$hookMachine = Get-PeMachine -FilePath $hookSrc
-if ($hookMachine -ne 0x014C) {
-    throw ("gta_sa_render_hook.asi must be 32-bit x86 (0x014C), got 0x{0:X4} at {1}" -f $hookMachine, $hookSrc)
+$conflictingAsiPaths = @(
+    (Join-Path $GameDir "gtaRenderHook_SA.asi"),
+    (Join-Path $GameDir "_gtaRenderHook.asi"),
+    (Join-Path $GameDir "scripts\gtaRenderHook.asi"),
+    (Join-Path $GameDir "scripts\gtaRenderHook_SA.asi"),
+    (Join-Path $GameDir "scripts\_gtaRenderHook.asi"),
+    (Join-Path $GameDir "scripts\gta_sa_render_hook.asi"),
+    (Join-Path $GameDir "plugins\gtaRenderHook.asi"),
+    (Join-Path $GameDir "plugins\gtaRenderHook_SA.asi"),
+    (Join-Path $GameDir "plugins\_gtaRenderHook.asi"),
+    (Join-Path $GameDir "plugins\gta_sa_render_hook.asi")
+)
+$foundConflicts = @($conflictingAsiPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+if ($foundConflicts.Count -gt 0) {
+    throw "Conflicting RenderHook ASI file(s) found (ASI Stack Mutual Exclusion violation): $($foundConflicts -join ', '). Remove them before deploying."
 }
-$driverMachine = Get-PeMachine -FilePath $driverSrc
-if ($driverMachine -ne 0x8664) {
-    throw ("gta_sa_render_driver.exe must be 64-bit x64 (0x8664), got 0x{0:X4} at {1}" -f $driverMachine, $driverSrc)
-}
-$glslangMachine = Get-PeMachine -FilePath $glslangSrc
-if ($glslangMachine -ne 0x8664) {
-    throw ("glslangValidator.exe must be 64-bit x64 (0x8664), got 0x{0:X4} at {1}" -f $glslangMachine, $glslangSrc)
+
+$hookPdbSrc = $null
+$atbDllSrc = $null
+if (-not $ShadersOnly) {
+    $hookSrc = Resolve-ExistingFile -Label "gtaRenderHook.asi (x86 DirectX 11)" -Candidates @(
+        (Join-Path $BuildDir "$Config\gtaRenderHook.asi"),
+        (Join-Path $BuildDir "gtaRenderHook\$Config\gtaRenderHook.asi"),
+        (Join-Path $BuildDir "gtaRenderHook.asi"),
+        (Join-Path $BuildDir "gtaRenderHook\gtaRenderHook.asi"),
+        (Join-Path $StagingDir "gtaRenderHook.asi"),
+        (Join-Path $repoRoot "gtaRenderHook\$Config\gtaRenderHook.asi"),
+        (Join-Path $repoRoot "$Config\gtaRenderHook.asi")
+    )
+    $hookMachine = Get-PeMachine -FilePath $hookSrc
+    if ($hookMachine -ne 0x014C) {
+        throw ("gtaRenderHook.asi must be 32-bit x86 (0x014C), got 0x{0:X4} at {1}" -f $hookMachine, $hookSrc)
+    }
+    $pdbCandidate = [System.IO.Path]::ChangeExtension($hookSrc, ".pdb")
+    if (Test-Path -LiteralPath $pdbCandidate -PathType Leaf) {
+        $hookPdbSrc = $pdbCandidate
+    }
+    $atbCandidates = @(@(
+        $(if ($env:ANT_TWEAKBAR) { Join-Path $env:ANT_TWEAKBAR "lib\AntTweakBar.dll" }),
+        $(if ($env:ANT_TWEAKBAR_DIR) { Join-Path $env:ANT_TWEAKBAR_DIR "lib\AntTweakBar.dll" }),
+        (Join-Path $repoParent "build_cache\deps\AntTweakBar\lib\AntTweakBar.dll")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) })
+    if ($atbCandidates.Count -gt 0) {
+        $atbDllSrc = $atbCandidates[0]
+        $atbMachine = Get-PeMachine -FilePath $atbDllSrc
+        if ($atbMachine -ne 0x014C) {
+            throw ("AntTweakBar.dll must be 32-bit x86 (0x014C), got 0x{0:X4} at {1}" -f $atbMachine, $atbDllSrc)
+        }
+    }
 }
 
 if ($InstallAsiLoader) {
@@ -184,35 +193,69 @@ if ($InstallAsiLoader) {
         throw ("Ultimate ASI Loader winmm.dll must be 32-bit x86 (0x014C), got 0x{0:X4}" -f $ualMachine)
     }
     Copy-Item -LiteralPath $AsiLoaderPath -Destination (Join-Path $GameDir "winmm.dll") -Force
+} else {
+    $existingWinmm = Join-Path $GameDir "winmm.dll"
+    if (Test-Path -LiteralPath $existingWinmm -PathType Leaf) {
+        $existingWinmmMachine = Get-PeMachine -FilePath $existingWinmm
+        if ($existingWinmmMachine -ne 0x014C) {
+            throw ("Existing winmm.dll in $GameDir must be 32-bit x86 (0x014C), got 0x{0:X4}" -f $existingWinmmMachine)
+        }
+    }
 }
 
-# Both 32-bit gta_sa_render_hook.asi and 64-bit gta_sa_render_driver.exe share
-# the game folder and import vulkan-1.dll; remove any single-bitness app-local
-# copy so Windows loads SysWOW64\vulkan-1.dll and System32\vulkan-1.dll.
-$appLocalVulkan = Join-Path $GameDir "vulkan-1.dll"
-if (Test-Path -LiteralPath $appLocalVulkan -PathType Leaf) {
-    Remove-Item -LiteralPath $appLocalVulkan -Force
-    Write-Host "[CLEAN] Removed app-local vulkan-1.dll to preserve WOW64 SysWOW64/System32 loader routing."
+$legacyVulkanFiles = @(
+    "gta_sa_render_hook.asi",
+    "gta_sa_render_hook.pdb",
+    "gta_sa_render_driver.exe",
+    "gta_sa_render_driver.pdb",
+    "glslangValidator.exe",
+    "vulkan-1.dll"
+)
+if (-not $ShadersOnly -or (Test-Path -LiteralPath (Join-Path $GameDir "gtaRenderHook.asi") -PathType Leaf)) {
+    foreach ($legacyName in $legacyVulkanFiles) {
+        $legacyPath = Join-Path $GameDir $legacyName
+        if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
+            Remove-Item -LiteralPath $legacyPath -Force
+            Write-Host "     Removed retired Vulkan IPC artifact: $legacyName"
+        }
+    }
+} elseif (Test-Path -LiteralPath (Join-Path $GameDir "gta_sa_render_hook.asi") -PathType Leaf) {
+    Write-Warning "Retired Vulkan IPC plugin 'gta_sa_render_hook.asi' is still present in $GameDir. Run deploy_to_game.ps1 without -ShadersOnly after building gtaRenderHook.asi to replace it."
+}
+foreach ($legacyShaderSubdir in @("vulkan", "d3d11")) {
+    $legacyDirPath = Join-Path $GameDir "shaders\$legacyShaderSubdir"
+    if (Test-Path -LiteralPath $legacyDirPath -PathType Container) {
+        Remove-Item -LiteralPath $legacyDirPath -Recurse -Force
+        Write-Host "     Removed retired shader directory: shaders\$legacyShaderSubdir"
+    }
 }
 
-Copy-Item -LiteralPath $hookSrc -Destination (Join-Path $GameDir "gta_sa_render_hook.asi") -Force
-Copy-Item -LiteralPath $driverSrc -Destination (Join-Path $GameDir "gta_sa_render_driver.exe") -Force
-Copy-Item -LiteralPath $glslangSrc -Destination (Join-Path $GameDir "glslangValidator.exe") -Force
+if (-not $ShadersOnly) {
+    Copy-Item -LiteralPath $hookSrc -Destination (Join-Path $GameDir "gtaRenderHook.asi") -Force
+    $destPdb = Join-Path $GameDir "gtaRenderHook.pdb"
+    if ($hookPdbSrc) {
+        Copy-Item -LiteralPath $hookPdbSrc -Destination $destPdb -Force
+    } elseif (Test-Path -LiteralPath $destPdb -PathType Leaf) {
+        Remove-Item -LiteralPath $destPdb -Force
+        Write-Host "     Removed stale symbol file: gtaRenderHook.pdb"
+    }
+    if ($atbDllSrc) {
+        Copy-Item -LiteralPath $atbDllSrc -Destination (Join-Path $GameDir "AntTweakBar.dll") -Force
+    }
+}
 
 $destShaders = Join-Path $GameDir "shaders"
-$destResources = Join-Path $GameDir "resources"
 New-Item -ItemType Directory -Force -Path $destShaders | Out-Null
-New-Item -ItemType Directory -Force -Path $destResources | Out-Null
 
-Get-ChildItem -LiteralPath $shadersSrc -Force | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $destShaders -Recurse -Force
-}
-Get-ChildItem -LiteralPath $resourcesSrc -Force | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $destResources -Recurse -Force
+Get-ChildItem -LiteralPath $shadersSrc -File -Force | Where-Object { $_.Extension -in @('.hlsl', '.hlsli') } | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destShaders $_.Name) -Force
 }
 
 foreach ($entry in $retailBaselineHashes.GetEnumerator()) {
     $full = Join-Path $GameDir $entry.Key
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        throw "Protected retail file '$($entry.Key)' is missing after deployment: $full"
+    }
     $postHash = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
     if ($postHash -ne $entry.Value) {
         throw "Retail file integrity check failed for '$($entry.Key)': expected $($entry.Value), got $postHash"
@@ -221,13 +264,27 @@ foreach ($entry in $retailBaselineHashes.GetEnumerator()) {
 
 $deployedWinmm = Join-Path $GameDir "winmm.dll"
 $hasAsiLoader = (Test-Path -LiteralPath $deployedWinmm -PathType Leaf)
-
-Write-Host "[OK] Deployed RenderHook Vulkan IPC package to: $GameDir"
-Write-Host ("     gta_sa_render_hook.asi   (PE 0x{0:X4}) <- {1}" -f (Get-PeMachine -FilePath (Join-Path $GameDir "gta_sa_render_hook.asi")), $hookSrc)
-Write-Host ("     gta_sa_render_driver.exe (PE 0x{0:X4}) <- {1}" -f (Get-PeMachine -FilePath (Join-Path $GameDir "gta_sa_render_driver.exe")), $driverSrc)
-Write-Host ("     glslangValidator.exe     (PE 0x{0:X4}) <- {1}" -f (Get-PeMachine -FilePath (Join-Path $GameDir "glslangValidator.exe")), $glslangSrc)
+$deployedWinmmMachine = $null
 if ($hasAsiLoader) {
-    Write-Host ("     winmm.dll (ASI Loader)   (PE 0x{0:X4})" -f (Get-PeMachine -FilePath $deployedWinmm))
+    $deployedWinmmMachine = Get-PeMachine -FilePath $deployedWinmm
+    if ($deployedWinmmMachine -ne 0x014C) {
+        throw ("Existing winmm.dll in $GameDir must be 32-bit x86 (0x014C), got 0x{0:X4}" -f $deployedWinmmMachine)
+    }
+}
+
+Write-Host "[OK] Deployed RenderHook DirectX 11 package to: $GameDir"
+if (-not $ShadersOnly) {
+    Write-Host ("     gtaRenderHook.asi      (PE 0x{0:X4}) <- {1}" -f (Get-PeMachine -FilePath (Join-Path $GameDir "gtaRenderHook.asi")), $hookSrc)
+    if ($hookPdbSrc) {
+        Write-Host ("     gtaRenderHook.pdb                   <- {0}" -f $hookPdbSrc)
+    }
+    if ($atbDllSrc) {
+        Write-Host ("     AntTweakBar.dll        (PE 0x{0:X4}) <- {1}" -f (Get-PeMachine -FilePath (Join-Path $GameDir "AntTweakBar.dll")), $atbDllSrc)
+    }
+}
+Write-Host ("     shaders\*.hlsl/.hlsli  <- {0}" -f $shadersSrc)
+if ($hasAsiLoader) {
+    Write-Host ("     winmm.dll (ASI Loader) (PE 0x{0:X4})" -f $deployedWinmmMachine)
 } else {
     Write-Warning "No winmm.dll ASI loader detected in $GameDir. Re-run with -InstallAsiLoader if no ASI loader is installed."
 }

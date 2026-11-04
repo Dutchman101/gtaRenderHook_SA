@@ -12,16 +12,21 @@ bool has_suffix( const std::string &s, const std::string &suffix )
     return ( s.size() >= suffix.size() ) &&
            std::equal( suffix.rbegin(), suffix.rend(), s.rbegin() );
 }
-CPBSMaterial::CPBSMaterial( const std::string &fname ) : m_sName( fname )
+CPBSMaterial::CPBSMaterial( const std::string &fname )
+    : m_sName( has_suffix( fname, ".mat" )
+                   ? std::filesystem::path( fname ).stem().string()
+                   : fname )
 {
+    if ( CPBSMaterialMgr::materialsTXD == nullptr )
+        return;
     auto file = fopen(
-        ( std::string( "materials\\" ) + m_sName + ".mat" ).c_str(), "rt" );
-    char specFileName[80];
-    char normalFileName[80];
+        ( has_suffix( fname, ".mat" ) ? fname : ( std::string( "materials\\" ) + m_sName + ".mat" ) ).c_str(), "rt" );
+    char specFileName[80]{};
+    char normalFileName[80]{};
     if ( file )
     {
         auto res = fscanf( file, "%79s\n", specFileName );
-        if ( res == EOF )
+        if ( res != 1 )
         {
             fclose( file );
             return;
@@ -31,7 +36,7 @@ CPBSMaterial::CPBSMaterial( const std::string &fname ) : m_sName( fname )
 
         res = fscanf( file, "%79s\n", normalFileName );
 
-        if ( res == EOF )
+        if ( res != 1 )
         {
             fclose( file );
             return;
@@ -45,7 +50,10 @@ CPBSMaterial::CPBSMaterial( const std::string &fname ) : m_sName( fname )
 
 void CPBSMaterialMgr::LoadMaterials()
 {
-    materialsTXD = CFileLoader::LoadTexDictionary( "materials\\materials.txd" );
+    for ( auto &entry : materials )
+        delete entry.second;
+    materials.clear();
+    materialsTXD = nullptr;
     std::string     path( "materials/" );
     std::string     ext( ".mat" );
     std::error_code ec;
@@ -53,19 +61,53 @@ void CPBSMaterialMgr::LoadMaterials()
     {
         g_pDebug->printMsg(
             "Materials folder not found, material rendering will be disabled.",
-            0 );
+            1 );
         return;
     }
     
+    if ( !std::filesystem::exists( "materials\\materials.txd", ec ) )
+    {
+        g_pDebug->printMsg(
+            "Materials TXD not found, material rendering will be disabled.",
+            1 );
+        return;
+    }
+    materialsTXD = CFileLoader::LoadTexDictionary( "materials\\materials.txd" );
+    if ( materialsTXD == nullptr )
+    {
+        g_pDebug->printMsg(
+            "Failed to load materials.txd, material rendering will be disabled.",
+            1 );
+        return;
+    }
     auto dir_iter = std::filesystem::recursive_directory_iterator( path, ec );
     for ( auto &p : dir_iter )
     {
         if ( p.path().extension() == ext )
         {
-            auto materialptr = new CPBSMaterial( p.path().stem().string() );
-            materials[materialptr->m_sName] = materialptr;
+            auto materialptr = new CPBSMaterial( p.path().string() );
+            if ( materialptr->m_tSpecRoughness != nullptr &&
+                 materialptr->m_tSpecRoughness->raster != nullptr )
+            {
+                auto it = materials.find( materialptr->m_sName );
+                if ( it != materials.end() )
+                    delete it->second;
+                materials[materialptr->m_sName] = materialptr;
+            }
+            else
+            {
+                delete materialptr;
+            }
         }
     }
 }
 
 void CPBSMaterialMgr::SetMaterial( const char *textureName ) {}
+
+CPBSMaterial *CPBSMaterialMgr::FindMaterial( const char *textureName )
+{
+    if ( textureName == nullptr || textureName[0] == '\0' || materials.empty() )
+        return nullptr;
+    auto it = materials.find( textureName );
+    return ( it != materials.end() ) ? it->second : nullptr;
+}

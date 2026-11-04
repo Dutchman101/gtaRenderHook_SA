@@ -2,8 +2,12 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
-    <ANT_TWEAKBAR>D:\AntTweakBar_116\AntTweakBar</ANT_TWEAKBAR>
-    <TINY_XML>D:\tinyxml2-master\tinyxml2</TINY_XML>
+    <PLUGIN_SDK_DIR Condition="'$(PLUGIN_SDK_DIR)'=='' and exists('$(ProjectDir)..\..\build_cache\deps\plugin-sdk')">$(ProjectDir)..\..\build_cache\deps\plugin-sdk</PLUGIN_SDK_DIR>
+    <ANT_TWEAKBAR Condition="'$(ANT_TWEAKBAR)'=='' and exists('$(ProjectDir)..\..\build_cache\deps\AntTweakBar')">$(ProjectDir)..\..\build_cache\deps\AntTweakBar</ANT_TWEAKBAR>
+    <ANT_TWEAKBAR Condition="'$(ANT_TWEAKBAR)'==''">D:\AntTweakBar_116\AntTweakBar</ANT_TWEAKBAR>
+    <TINY_XML Condition="'$(TINY_XML)'=='' and exists('$(ProjectDir)..\..\build_cache\deps\tinyxml2')">$(ProjectDir)..\..\build_cache\deps\tinyxml2</TINY_XML>
+    <TINY_XML Condition="'$(TINY_XML)'==''">D:\tinyxml2-master\tinyxml2</TINY_XML>
+    <FASTNOISESIMD_DIR Condition="'$(FASTNOISESIMD_DIR)'=='' and exists('$(ProjectDir)..\..\build_cache\deps\FastNoiseSIMD\FastNoiseSIMD')">$(ProjectDir)..\..\build_cache\deps\FastNoiseSIMD\FastNoiseSIMD</FASTNOISESIMD_DIR>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup />

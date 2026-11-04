@@ -3,20 +3,39 @@
         {
             "name": "Win32",
             "includePath": [
-                "${workspaceFolder}/**",
-                "${VULKAN_SDK}/**",
-                "C:/Users/peter/Source/Repos/plugin-sdk/plugin_sa",
-                "C:/VulkanSDK/1.1.77.0/Include"
+                "${workspaceFolder}/gtaRenderHook/**",
+                "${env:PLUGIN_SDK_DIR}/plugin_sa",
+                "${env:PLUGIN_SDK_DIR}/plugin_sa/game_sa",
+                "${env:PLUGIN_SDK_DIR}/plugin_sa/game_sa/enums",
+                "${env:PLUGIN_SDK_DIR}/plugin_sa/game_sa/rw",
+                "${env:PLUGIN_SDK_DIR}/safetyhook",
+                "${env:PLUGIN_SDK_DIR}/shared",
+                "${env:PLUGIN_SDK_DIR}/shared/game",
+                "${env:ANT_TWEAKBAR}/include",
+                "${env:TINY_XML}",
+                "${env:TINY_XML}/..",
+                "${env:FASTNOISESIMD_DIR}"
+            ],
+            "forcedInclude": [
+                "${workspaceFolder}/gtaRenderHook/stdafx.h"
             ],
             "defines": [
+                "WIN32",
                 "_DEBUG",
-                "UNICODE",
-                "_UNICODE"
+                "_WINDOWS",
+                "_USRDLL",
+                "_MBCS",
+                "GTARENDERHOOK_EXPORTS",
+                "GTA_SA",
+                "GTASA",
+                "PLUGIN_SGV_10US",
+                "_CRT_NON_CONFORMING_SWPRINTFS",
+                "_CRT_SECURE_NO_WARNINGS"
             ],
-            "compilerPath": "C:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Tools/MSVC/14.14.26428/bin/Hostx64/x64/cl.exe",
+            "compilerPath": "cl.exe",
             "cStandard": "c11",
             "cppStandard": "c++17",
-            "intelliSenseMode": "msvc-x64"
+            "intelliSenseMode": "msvc-x86"
         }
     ],
     "version": 4

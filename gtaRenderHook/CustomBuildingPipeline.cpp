@@ -196,23 +196,30 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         //}
         const RwUInt8 effectiveAlpha = ( m_uiDeferredStage == 1 && CRendererRH::FadingPass ) ? 255 : mesh.material->color.alpha;
         bAlphaEnable |= effectiveAlpha != 255 || vertexAlpha;
+        bool bHasSpecTex   = false;
+        bool bHasNormalTex = false;
 
-        g_pRwCustomEngine->SetTexture( mesh.material->texture, 0 );
+        if ( mesh.material->texture && mesh.material->texture->raster )
+            g_pRwCustomEngine->SetTexture( mesh.material->texture, 0 );
+        else
+            g_pRwCustomEngine->SetTexture( nullptr, 0 );
 
-        if ( mesh.material->texture )
+        if ( mesh.material->texture && mesh.material->texture->raster )
         {
             bAlphaEnable |=
                 GetD3D1XRaster( mesh.material->texture->raster )->alpha;
             CPBSMaterial *mat =
-                CPBSMaterialMgr::materials[mesh.material->texture->name];
-            if ( mat != nullptr )
+                ( m_uiDeferredStage != 2 ) ? CPBSMaterialMgr::FindMaterial( mesh.material->texture->name ) : nullptr;
+            if ( mat != nullptr && mat->m_tSpecRoughness != nullptr && mat->m_tSpecRoughness->raster != nullptr )
             {
                 g_pStateMgr->SetRaster( mat->m_tSpecRoughness->raster, 1 );
                 g_pRenderBuffersMgr->UpdateHasSpecTex( 1 );
-                if ( mat->m_tNormals )
+                bHasSpecTex = true;
+                if ( mat->m_tNormals != nullptr && mat->m_tNormals->raster != nullptr )
                 {
                     g_pStateMgr->SetRaster( mat->m_tNormals->raster, 2 );
                     g_pRenderBuffersMgr->UpdateHasNormalTex( 1 );
+                    bHasNormalTex = true;
                 }
             }
         }
@@ -236,11 +243,17 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         g_pStateMgr->FlushStates();
         GET_D3D_RENDERER->DrawIndexed( mesh.numIndex, mesh.startIndex,
                                        mesh.minVert );
-        g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
-        g_pRenderBuffersMgr->UpdateHasNormalTex( 0 );
+        if ( bHasSpecTex )
+            g_pRenderBuffersMgr->UpdateHasSpecTex( 0 );
+        if ( bHasNormalTex )
+            g_pRenderBuffersMgr->UpdateHasNormalTex( 0 );
+        if ( bHasSpecTex )
+            g_pStateMgr->SetRaster( nullptr, 1 );
+        if ( bHasNormalTex )
+            g_pStateMgr->SetRaster( nullptr, 2 );
     }
-    g_pStateMgr->SetRaster( nullptr, 1 );
-    g_pStateMgr->SetRaster( nullptr, 2 );
+    // PBS stages 1 & 2 are reset per mesh when bound above.
+
     if ( m_uiDeferredStage == 3 || m_uiDeferredStage == 4 )
         m_pVoxelGS->ReSet();
     g_pRenderBuffersMgr->UpdateAlphaPass( 0.0f, false );

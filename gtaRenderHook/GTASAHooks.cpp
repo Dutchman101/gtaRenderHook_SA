@@ -61,16 +61,19 @@ void CGTASAHooks::Patch()
 
 LRESULT CALLBACK CGTASAHooks::AntTweakBarHookMsgProc( int code, WPARAM wParam, LPARAM lParam )
 {
-    if ( lParam & 0x80000000 || lParam & 0x40000000 )
+    if ( code < 0 )
     {
         return CallNextHookEx( m_hAntTweakBarHook, code, wParam, lParam );
     }
 
-    if ( code >= 0 )
+    if ( code >= 0 && wParam == PM_REMOVE && lParam != 0 && SettingsHolder::Instance()->IsGUIEnabled() )
     {
-        if ( TwEventWin( ( (LPMSG)lParam )->hwnd, ( (LPMSG)lParam )->message, ( (LPMSG)lParam )->wParam, ( (LPMSG)lParam )->lParam ) )
+        LPMSG pMsg = (LPMSG)lParam;
+        bool bIsToggleOrMenuKey = ( pMsg->message == WM_KEYDOWN || pMsg->message == WM_KEYUP || pMsg->message == WM_SYSKEYDOWN || pMsg->message == WM_SYSKEYUP ) &&
+                                  ( pMsg->wParam == VK_F12 || pMsg->wParam == VK_ESCAPE );
+        if ( !bIsToggleOrMenuKey && TwEventWin( pMsg->hwnd, pMsg->message, pMsg->wParam, pMsg->lParam ) )
         {
-            return FALSE;
+            ( (LPMSG)lParam )->message = WM_NULL;
         }
     }
     return CallNextHookEx( m_hAntTweakBarHook, code, wParam, lParam );

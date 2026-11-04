@@ -38,7 +38,7 @@ bool mCameraEndUpdate( void * a, void * b, int c );
 bool mRasterShowRaster( void * a, void * b, int c );
 bool mRasterDestroy( void * a, void * b, int c );
 /*typedef bool(*RwStandardFunc)(void *pOut, void *pInOut, int nI);*/
-// RenderWare rendering engine interface(allows you to implement different rendering APIs like DX12, Vulkan or OpenGL).
+// RenderWare rendering engine interface (DirectX 11).
 class CIRwRenderEngine
 {
 public:

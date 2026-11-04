@@ -101,7 +101,7 @@ void CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
     m_pRenderCloudsPS->Set();
     CFullscreenQuad::Draw();
     // Than combine them with
-    g_pRwCustomEngine->SetRenderTargets( &to, Scene.m_pRwCamera->zBuffer, 1 );
+    g_pRwCustomEngine->SetRenderTargets( &to, nullptr, 1 );
     g_pStateMgr->FlushRenderTargets();
     g_pStateMgr->SetRaster( from );
     g_pStateMgr->SetRaster( m_pCloudsRaster, 2 );
@@ -167,8 +167,8 @@ void CCloudRendering::GenerateCloudsTexture() {
 
     D3D11_SUBRESOURCE_DATA texture_data{};
     texture_data.pSysMem          = pixel_array.data();
-    texture_data.SysMemPitch      = 128 * 128 * sizeof( RwV4d );
-    texture_data.SysMemSlicePitch = 128 * sizeof( RwV4d );
+    texture_data.SysMemPitch      = 128 * sizeof( RwV4d );
+    texture_data.SysMemSlicePitch = 128 * 128 * sizeof( RwV4d );
     raster_impl->resourse =
         new CD3D1X3DTexture( m_pNoise3DRaster, &texture_data );
 
@@ -198,7 +198,7 @@ void TW_CALL ReloadCloudShadersCallBack( void *value )
     gCloudRenderingSettings.m_ShaderDefineList.AddDefine(
         "CLOUD_TO_SUN_RM_STEPS",
         std::to_string(
-            gCloudRenderingSettings.GetUInt( "CloudsRaymarchingSteps" ) ) );
+            gCloudRenderingSettings.GetUInt( "SunRaymarchingSteps" ) ) );
 }
 void TW_CALL ReloadCloudTexturesCallBack( void *value )
 {

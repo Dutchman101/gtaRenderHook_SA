@@ -124,6 +124,24 @@ void CSAIdleHook::Idle( void *Data )
     PrepareRwCamera();
     if ( !RsCameraBeginUpdate( Scene.m_pRwCamera ) )
         return;
+    if ( dxEngine->m_bScreenSizeChanged )
+    {
+        g_pDeferredRenderer->QueueTextureReload();
+        CVolumetricLighting::QueueTextureReload();
+        CCloudRendering::QueueTextureReload();
+        CAmbientOcclusion::QueueTextureReload();
+        CFullscreenQuad::QueueTextureReload();
+        CTemporalAA::QueueTextureReload();
+        dxEngine->ReloadTextures();
+        dxEngine->m_bScreenSizeChanged = false;
+    }
+    if ( !FrontEndMenuManager.m_bMenuActive )
+        PrepareRenderStuff();
+    else if ( SettingsHolder::Instance()->IsGUIEnabled() )
+    {
+        SettingsHolder::Instance()->DisableGUI();
+        CTimer__m_UserPause = false;
+    }
     if ( !FrontEndMenuManager.m_bMenuActive && TheCamera.GetScreenFadeStatus() != 2 )
     {
         RenderInGame();
@@ -133,6 +151,8 @@ void CSAIdleHook::Idle( void *Data )
         {
             POINT mousePos;
             GetCursorPos( &mousePos );
+            if ( dxEngine->getRenderer()->getHWND() )
+                ScreenToClient( dxEngine->getRenderer()->getHWND(), &mousePos );
             //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEVERTEXALPHAENABLE, TRUE);
             FrontEndMenuManager.m_apTextures[23].SetRenderState();
             FrontEndMenuManager.m_apTextures[23].DrawTxRect(
@@ -182,7 +202,7 @@ void CSAIdleHook::RenderInGame()
 
     // previous world matrices for object motion vectors are per rendered frame
     g_pRenderBuffersMgr->NextFrame();
-    PrepareRenderStuff();
+
 
     DefinedState();
     TheCamera.m_mViewMatrix.Update();
@@ -295,7 +315,7 @@ void CSAIdleHook::RenderInGame()
     //                                     Scene.m_pRwCamera->zBuffer, 1 );
     DebugRendering::Render();
     if ( gDebugSettings.GetToggleField( "DebugRenderTarget" ) &&
-         gDebugSettings.DebugRenderTargetList[gDebugSettings.DebugRenderTargetNumber] != nullptr )
+         gDebugSettings.DebugRenderTargetNumber < gDebugSettings.DebugRenderTargetList.size() && gDebugSettings.DebugRenderTargetList[gDebugSettings.DebugRenderTargetNumber] != nullptr )
         DebugRendering::RenderRaster( gDebugSettings.DebugRenderTargetList[gDebugSettings.DebugRenderTargetNumber] );
 
     DefinedState();
@@ -549,15 +569,38 @@ void CSAIdleHook::PrepareRenderStuff()
     mousePos.y = RsGlobal.maximumHeight * 0.5f;
     POINT pMousePos;
     // TODO: add custom key to show menu
-    auto guiEnabled = GetKeyState( VK_F12 ) & 1;
+    static bool s_bPrevGuiEnabled = false;
+    static bool s_bPrevF12Down = false;
+    bool bF12Down = ( GetKeyState( VK_F12 ) & 0x8000 ) != 0;
+    if ( bF12Down && !s_bPrevF12Down )
+    {
+        if ( SettingsHolder::Instance()->IsGUIEnabled() )
+            SettingsHolder::Instance()->DisableGUI();
+        else
+            SettingsHolder::Instance()->EnableGUI();
+    }
+    s_bPrevF12Down = bF12Down;
+    bool guiEnabled = SettingsHolder::Instance()->IsGUIEnabled();
     if ( guiEnabled )
         SettingsHolder::Instance()->EnableGUI();
     else
         SettingsHolder::Instance()->DisableGUI();
 
-    GetCursorPos( &pMousePos );
+    if ( guiEnabled != s_bPrevGuiEnabled )
+    {
+        ( (void( __cdecl * )())0x746F70 )();
+        ( (void( __cdecl * )( int ))0x7469A0 )( guiEnabled ? 0 : 1 );
+        if ( guiEnabled )
+            RsMouseSetPos( &mousePos );
+        s_bPrevGuiEnabled = guiEnabled;
+    }
+    HWND hWnd = guiEnabled ? static_cast<CRwD3D1XEngine*>( g_pRwCustomEngine )->getRenderer()->getHWND() : nullptr;
+    if ( guiEnabled && GetCursorPos( &pMousePos ) && hWnd )
+        ScreenToClient( hWnd, &pMousePos );
     if ( !guiEnabled )
-        RsMouseSetPos( &mousePos );
+    {
+        // Let DirectInput handle in-game mouse movement exclusively without per-frame SetCursorPos interference
+    }
     else
         TwMouseMotion( pMousePos.x, pMousePos.y );
     //ShowCursor(guiEnabled);
@@ -615,8 +658,9 @@ void CSAIdleHook::InitPerFrame2D()
 
 void CSAIdleHook::TimeUpdate()
 {
-    //while (CTimer__GetTimeMillisecondsFromStart() - CGame__TimeMillisecondsFromStart < 1)
-    //	;
+    while ( CTimer__GetTimeMillisecondsFromStart() < 1 )
+        ;
+
     CGame__TimeMillisecondsFromStart = CTimer__GetTimeMillisecondsFromStart();
     CTimer__Update();
 }

@@ -18,6 +18,7 @@ class CPBSMaterialMgr
 public:
     static void LoadMaterials();
     static void SetMaterial( const char* textureName );
+    static CPBSMaterial* FindMaterial( const char* textureName );
     static RwTexDictionary* materialsTXD;
     static std::unordered_map<std::string, CPBSMaterial*> materials;
 };

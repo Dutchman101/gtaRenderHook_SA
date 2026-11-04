@@ -119,7 +119,6 @@ RwBool CRwGameHooks::Im2DRenderLine( RwIm2DVertex *vertices, RwInt32 numVertices
 
 void CRwGameHooks::Im3DOpen()
 {
-    //static_cast<CRwVulkanEngine*>(g_pRwCustomEngine)->Im3DRenderOpen();
 }
 
 void CRwGameHooks::InitGamma( void *p )

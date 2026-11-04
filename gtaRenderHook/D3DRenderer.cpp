@@ -13,6 +13,7 @@
 
 CD3DRenderer::CD3DRenderer( HWND& window )
 {
+    SetProcessDPIAware();
     m_hWnd = window;
     // dxgi factory initialization
     if ( !CALL_D3D_API( CreateDXGIFactory( __uuidof( IDXGIFactory ), reinterpret_cast<void**>( &m_pdxgiFactory ) ),
@@ -91,11 +92,16 @@ bool CD3DRenderer::InitDevice()
     GetClientRect( m_hWnd, &rc );
     m_uiWidth = rc.right - rc.left;
     m_uiHeight = rc.bottom - rc.top;
-    if ( m_uiWidth != currentAdapterMode.Width || m_uiHeight != currentAdapterMode.Height )
+    if ( isWindowed || m_uiWidth != currentAdapterMode.Width || m_uiHeight != currentAdapterMode.Height )
     {
         m_uiWidth = currentAdapterMode.Width;
         m_uiHeight = currentAdapterMode.Height;
-        SetWindowPos( m_hWnd, nullptr, 0, 0, currentAdapterMode.Width, currentAdapterMode.Height, 0 );
+        if ( isWindowed )
+        {
+            SetWindowLongPtr( m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE );
+            SetWindowLongPtr( m_hWnd, GWL_EXSTYLE, 0 );
+        }
+        SetWindowPos( m_hWnd, nullptr, 0, 0, currentAdapterMode.Width, currentAdapterMode.Height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED );
     }
     // initialize device creation flags
     // TODO: add ability to set some custom flags
