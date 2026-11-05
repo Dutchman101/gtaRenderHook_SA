@@ -19,17 +19,32 @@ CD3DRenderer::CD3DRenderer( HWND& window )
     if ( !CALL_D3D_API( CreateDXGIFactory( __uuidof( IDXGIFactory ), reinterpret_cast<void**>( &m_pdxgiFactory ) ),
                         "Failed to create DXGI Factory." ) ) return;
 
-    IDXGIAdapter * pAdapter;
-    // Init adapter list.
+    IDXGIAdapter * pAdapter = nullptr;
+    // Init adapter list. EnumAdapters only writes the output on success, so the enumeration ends
+    // at the first failure and only adapters that were actually handed over are kept.
     if ( !gDebugSettings.GetToggleField( "UseDefaultAdapter" ) )
     {
-        for ( UINT i = 0; m_pdxgiFactory->EnumAdapters( i, &pAdapter ) != DXGI_ERROR_NOT_FOUND; ++i )
+        for ( UINT i = 0; SUCCEEDED( m_pdxgiFactory->EnumAdapters( i, &pAdapter ) ) && pAdapter != nullptr; ++i )
             m_vAdapters.push_back( pAdapter );
     }
     else
     {
-        if ( m_pdxgiFactory->EnumAdapters( 0, &pAdapter ) != DXGI_ERROR_NOT_FOUND )
+        if ( SUCCEEDED( m_pdxgiFactory->EnumAdapters( 0, &pAdapter ) ) && pAdapter != nullptr )
             m_vAdapters.push_back( pAdapter );
+    }
+
+    // This index is read before InitDevice can check it, so the adapter list is validated here:
+    // a list that enumerated nothing has to stop here instead of being dereferenced.
+    if ( m_vAdapters.empty() || m_uiCurrentAdapter >= m_vAdapters.size() )
+    {
+        // Formatted into a fixed buffer because this reports a failed enumeration out of a constructor,
+        // so building a string here would allocate on the way out of the failure it reports.
+        char message[160];
+        snprintf( message, sizeof( message ),
+                  "Display mode enumeration skipped, %zu adapter(s) were enumerated for adapter index %u.",
+                  m_vAdapters.size(), m_uiCurrentAdapter );
+        g_pDebug->printError( message );
+        return;
     }
 
     IDXGIOutput *pOutput;
@@ -58,9 +73,14 @@ CD3DRenderer::CD3DRenderer( HWND& window )
 
     // populate adapter mode list, if mode description has refresh rate less than 60 Hz
     // TODO: perhaps max refresh rate should be choosen seperatly, maybe from settings file
-    for ( UINT i = 0; i < modeDescriptions.size(); i++ )
+    // GetDisplayModeList reports how many entries it wrote, which can be fewer than the list was
+    // sized for; the leftover entries stay zeroed and must not become display modes.
+    for ( UINT i = 0; i < modeCount && i < modeDescriptions.size(); i++ )
     {
-        if ( modeDescriptions[i].RefreshRate.Numerator / modeDescriptions[i].RefreshRate.Denominator <= 60 )
+        // Some outputs report a zero refresh-rate denominator; keep those entries instead of
+        // dividing by zero.
+        if ( modeDescriptions[i].RefreshRate.Denominator == 0 ||
+             modeDescriptions[i].RefreshRate.Numerator / modeDescriptions[i].RefreshRate.Denominator <= 60 )
             m_vAdapterModes.push_back( modeDescriptions[i] );
     }
 
@@ -71,6 +91,11 @@ CD3DRenderer::~CD3DRenderer()
 {
     for ( auto pAdapter : m_vAdapters )
         pAdapter->Release();
+    if ( m_pdxgiFactory )
+    {
+        m_pdxgiFactory->Release();
+        m_pdxgiFactory = nullptr;
+    }
 }
 
 bool CD3DRenderer::InitDevice()
@@ -78,9 +103,20 @@ bool CD3DRenderer::InitDevice()
     HRESULT hr = S_OK;
     // return if something is wrong, e.g. we have set some wrong parameters.
     // TODO: try to avoid these errors, for example reset current adapter mode to 0 or something like that, but perhaps this is just a garbage thought
-    if ( m_vAdapterModes.size() <= 1 ||
-         m_uiCurrentAdapterMode > m_vAdapterModes.size() )
+    // A single available display mode is perfectly usable, so only an empty list is fatal, and
+    // the index test has to reject the value equal to the size rather than one past it.
+    if ( m_vAdapterModes.empty() ||
+         m_uiCurrentAdapterMode >= m_vAdapterModes.size() ||
+         m_uiCurrentAdapter >= m_vAdapters.size() )
+    {
+        // Same reason as the enumeration report above: this is the device-failure path.
+        char message[224];
+        snprintf( message, sizeof( message ),
+                  "Device initialization skipped, %zu adapter(s) and %zu display mode(s) are available for adapter %u mode %u.",
+                  m_vAdapters.size(), m_vAdapterModes.size(), m_uiCurrentAdapter, m_uiCurrentAdapterMode );
+        g_pDebug->printError( message );
         return false;
+    }
 
     auto currentAdapterMode = m_vAdapterModes[m_uiCurrentAdapterMode];
     auto currentAdapter = m_vAdapters[m_uiCurrentAdapter];
@@ -226,8 +262,6 @@ bool CD3DRenderer::InitDevice()
         sd.Flags = isWindowed ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH : 0;
         CALL_D3D_API( m_pdxgiFactory->CreateSwapChain( m_pd3dDevice, &sd, &m_pSwapChain ), "Failed to create swap chain using DX11 API" );
     }
-    m_pdxgiFactory->Release();
-
     g_pDebug->printMsg( "Device initialization: end", 1 );
 
     return true;
@@ -241,12 +275,14 @@ void CD3DRenderer::DeInitDevice()
         m_pImmediateContext->Flush();
     }
 
+    // The DX11.1 path holds two references to the same swap chain, because the created chain is
+    // queried again straight after creation, so both references have to be released here.
     if ( m_pSwapChain1 )
     {
         m_pSwapChain1->Release();
         m_pSwapChain1 = nullptr;
     }
-    else if ( m_pSwapChain )
+    if ( m_pSwapChain )
     {
         m_pSwapChain->Release();
         m_pSwapChain = nullptr;
@@ -375,6 +411,8 @@ void CD3DRenderer::DrawIndexed( UINT indexCount, UINT startIndex, UINT baseVerte
 
 unsigned int CD3DRenderer::getAvaliableTextureMemory()
 {
+    if ( m_uiCurrentAdapter >= m_vAdapters.size() )
+        return 0;
     DXGI_ADAPTER_DESC desc;
     if ( !CALL_D3D_API( m_vAdapters[m_uiCurrentAdapter]->GetDesc( &desc ), "Failed to retrieve adapter description." ) )
         return 0;
@@ -383,15 +421,25 @@ unsigned int CD3DRenderer::getAvaliableTextureMemory()
 
 const char* CD3DRenderer::getAdapterInfo( UINT n )
 {
-    if ( n > getAdapterCount() )
+    if ( n >= getAdapterCount() )
         return "null";
-    char* info = new char[80];
+    char* info = m_sAdapterInfo;
     DXGI_ADAPTER_DESC desc;
 
-    if ( !CALL_D3D_API( m_vAdapters[n]->GetDesc( &desc ), "Failed to retrieve adapter description." ) )
-        wcstombs( info, L"no info", 80 );
-    else
-        wcstombs( info, desc.Description, 80 );
+    // wcstombs reports failure when the current locale cannot represent a character, and stores
+    // nothing at all for an empty description, so either case has to report no information instead
+    // of leaving whatever the buffer held from an earlier call. The buffer is a member, so it also
+    // has to be cleared here: wcstombs writes only what it converts and never a terminator, so a
+    // description shorter than the previous adapter's would otherwise keep that adapter's tail.
+    memset( info, 0, sizeof( m_sAdapterInfo ) );
+    size_t converted = static_cast<size_t>( -1 );
+    if ( CALL_D3D_API( m_vAdapters[n]->GetDesc( &desc ), "Failed to retrieve adapter description." ) )
+        converted = wcstombs( info, desc.Description, sizeof( m_sAdapterInfo ) - 1 );
+    if ( converted == static_cast<size_t>( -1 ) || converted == 0 )
+    {
+        memset( info, 0, sizeof( m_sAdapterInfo ) );
+        wcstombs( info, L"no info", sizeof( m_sAdapterInfo ) - 1 );
+    }
 
     return info;
 }

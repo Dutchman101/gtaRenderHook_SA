@@ -114,7 +114,7 @@ float4 PS(PS_DEFERRED_DN_IN i) : SV_Target
     const float3 ViewPos  = mViewInv[3].xyz;
     float3       WorldPos = i.vWorldPos.xyz;
     float3       Normals  = ( i.vNormalDepth.xyz * 0.5f + 0.5f ) * 2.0f - 1.0f;
-    Normals.z             = sqrt( 1.01 - dot( Normals.xy, Normals.xy ) );
+    Normals.z             = sqrt( saturate( 1.01 - dot( Normals.xy, Normals.xy ) ) );
     Normals               = normalize( Normals );
     float3 ViewDir        = normalize( WorldPos.xyz - ViewPos );
     float3 LightDir       = normalize( vSunLightDir.xyz );
@@ -126,7 +126,9 @@ float4 PS(PS_DEFERRED_DN_IN i) : SV_Target
                            SpecularTerm );
     // clamp to avoid unrealisticly high values
     // SpecularTerm = min(SpecularTerm, 16.0f);
-    // DiffuseTerm *= vSunLightDir.w;
+    // The daylight factor belongs here and on the specular line below. The shadow term does not
+    // apply it, so adding it there too would square the daylight factor.
+    DiffuseTerm *= vSunLightDir.w;
 
     float4 albedoSample = cDiffuseColor;
     if ( bHasTexture != 0 )
@@ -137,14 +139,12 @@ float4 PS(PS_DEFERRED_DN_IN i) : SV_Target
     if ( fAlphaBlendPass > 0.5f && albedoSample.a >= fAlphaCutoff )
         discard;
     float4 outColor;
-#if SAMPLE_SHADOWS != 1
-    float ShadowTerm =
-        SampleShadowCascades( txShadow, samShadow, samLinear, WorldPos,
-                              length( WorldPos.xyz - ViewPos ) ) *
-        vSunLightDir.w;
-#else
-    float ShadowTerm = 1.0;
-#endif
+    // This file is compiled with no local shader define list, so SAMPLE_SHADOWS is never defined
+    // here and a test on it would only ever read 0. Shadow sampling stays unconditional. The
+    // daylight factor in vSunLightDir.w is already applied on the diffuse term above and the
+    // specular term below, so none is applied here.
+    float ShadowTerm = SampleShadowCascades( txShadow, samShadow, samLinear, WorldPos,
+                                             length( WorldPos.xyz - ViewPos ) );
     float3 ReflDir = normalize( reflect( ViewDir, normalize( Normals.xyz ) ) );
     float3 FullScattering;
 

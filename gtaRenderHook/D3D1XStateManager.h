@@ -141,6 +141,10 @@ public:
     */
     void SetTextureAdressV( RwTextureAddressMode mode );
     /*!
+        Changes current texture W adress mode.
+    */
+    void SetTextureAdressW( RwTextureAddressMode mode );
+    /*!
         Changes current texture filter mode.
     */
     void SetTextureFilterMode( RwTextureFilterMode  mode );
@@ -327,6 +331,10 @@ public:
         Returns current V texture address mode.
     */
     RwTextureAddressMode GetTextureAdressV() { return CD3D1XEnumParser::ConvertTextureAddressMode( m_sampDesc.AddressV ); };
+    /*!
+        Returns current W texture address mode.
+    */
+    RwTextureAddressMode GetTextureAdressW() { return CD3D1XEnumParser::ConvertTextureAddressMode( m_sampDesc.AddressW ); };
     /*!
         Returns current texture filtering mode.
     */

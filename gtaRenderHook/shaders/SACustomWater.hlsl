@@ -112,13 +112,13 @@ HS_CONSTANT_DATA_OUTPUT ConstantsHS(InputPatch<VS_OUTPUT_HS_INPUT, 4> p)
     fScaleFactor.z = 0.5 * (p[0].fVertexDistanceFactor + p[1].fVertexDistanceFactor);
 
     // Scale edge factors 
-    //vEdgeTessellationFactors *= fScaleFactor.xyzx;
+    vEdgeTessellationFactors *= fScaleFactor.xyzx;
 	
     // Assign tessellation levels
     output.Edges[0] = vEdgeTessellationFactors.x;
     output.Edges[1] = vEdgeTessellationFactors.y;
     output.Edges[2] = vEdgeTessellationFactors.z;
-    output.Edges[3] = vEdgeTessellationFactors.z;
+    output.Edges[3] = vEdgeTessellationFactors.w;
     output.Inside[0] = output.Inside[1] = vEdgeTessellationFactors.w;
 
     return output;

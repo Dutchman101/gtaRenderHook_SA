@@ -105,7 +105,14 @@ float rwV3D_Dist( const RwV3d &a, const RwV3d &b )
 RwV3d rwV3D_Normalize( const RwV3d & a )
 {
     float length = sqrt( a.x*a.x + a.y*a.y + a.z*a.z );
-    return { a.x / length ,a.y / length,a.z / length };
+    // A zero-length or non-finite vector has no direction, so the input is handed back instead of being
+    // divided by; the ">" test is false for NaN as well. A component large enough to overflow the squared
+    // sum produces an infinite length, which the second test rejects: dividing by it would return a zero
+    // vector rather than the input. V3d::normalize and V4d::normalize leave the same cases alone, so the
+    // three behave alike.
+    if ( length > 0.0f && length < std::numeric_limits<float>::infinity() )
+        return { a.x / length ,a.y / length,a.z / length };
+    return a;
 }
 RwV3d rwV3D_Cross( const RwV3d & a, const RwV3d & b )
 {
@@ -118,9 +125,9 @@ float rwV3D_Dot( const RwV3d & a, const RwV3d & b )
 
 RwV3d rwV3D_Max( const RwV3d & a, const RwV3d & b )
 {
-    return ( a.x > b.x&&a.y > b.y&&a.z > b.z ) ? a : b;
+    return { max( a.x, b.x ), max( a.y, b.y ), max( a.z, b.z ) };
 }
 RwV3d rwV3D_Min( const RwV3d & a, const RwV3d & b )
 {
-    return ( a.x > b.x&&a.y > b.y&&a.z > b.z ) ? b : a;
+    return { min( a.x, b.x ), min( a.y, b.y ), min( a.z, b.z ) };
 }

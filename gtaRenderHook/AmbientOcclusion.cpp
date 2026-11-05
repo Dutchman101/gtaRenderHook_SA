@@ -100,7 +100,10 @@ void CAmbientOcclusion::RenderAO( RwRaster * normalsDepth )
     m_pAmbientOcclusionPS->Set();
     CFullscreenQuad::Draw();
     if ( !m_pDenoisePS || !m_pDenoisePS->IsValid() )
+    {
+        g_pStateMgr->SetRaster( nullptr );
         return;
+    }
 
     // Edge-aware blur, horizontal into the temporary target, then vertical back
     for ( int pass = 0; pass < 2; pass++ )
@@ -117,6 +120,7 @@ void CAmbientOcclusion::RenderAO( RwRaster * normalsDepth )
         CFullscreenQuad::Draw();
     }
     g_pStateMgr->SetRaster( nullptr, 1 );
+    g_pStateMgr->SetRaster( nullptr );
 }
 
 RwRaster* CAmbientOcclusion::GetAORaster()
@@ -160,6 +164,7 @@ void TW_CALL ReloadAOTexturesCallBack( void *value )
 }
 void AmbientOcclusionSettingsBlock::InitGUI( TwBar * mainBar )
 {
+    SettingsBlock::InitGUI( mainBar );
     TwAddButton( mainBar, "Reload AO shaders", ReloadAOShadersCallBack, nullptr, "group=AmbientOcclusion" );
     TwAddButton( mainBar, "Reload AO textures", ReloadAOTexturesCallBack, nullptr, "group=AmbientOcclusion" );
 }

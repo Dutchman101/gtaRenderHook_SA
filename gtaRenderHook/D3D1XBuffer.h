@@ -19,8 +19,10 @@ public:
 
     /*!
         Releases memory held by hardware buffer.
+
+        Virtual because derived buffer types are destroyed through CD3D1XBuffer pointers.
     */
-    ~CD3D1XBuffer();
+    virtual ~CD3D1XBuffer();
 
     /*!
         \brief Updates data inside buffer.

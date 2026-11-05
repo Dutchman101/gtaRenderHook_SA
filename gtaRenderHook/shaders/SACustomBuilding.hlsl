@@ -131,14 +131,12 @@ float4 PS( PS_DEFERRED_CF_IN i )
     if ( albedoSample.a < 0.3 )
         discard;
     float4 outColor;
-#if SAMPLE_SHADOWS != 1
-    float ShadowTerm =
-        SampleShadowCascades( txShadow, samShadow, samLinear, WorldPos,
-                              length( WorldPos.xyz - ViewPos ) ) *
-        vSunLightDir.w;
-#else
-    float ShadowTerm = 1.0;
-#endif
+    // This file is compiled with no local shader define list, so SAMPLE_SHADOWS is never defined
+    // here and a test on it would only ever read 0. Shadow sampling stays unconditional. The
+    // daylight factor in vSunLightDir.w is already applied on the diffuse term above and the
+    // specular term below, so none is applied here.
+    float ShadowTerm = SampleShadowCascades( txShadow, samShadow, samLinear, WorldPos,
+                                             length( WorldPos.xyz - ViewPos ) );
     float3 ReflDir =
         normalize( reflect( ViewDir, normalize( i.vNormalDepth.xyz ) ) );
     float3 FullScattering;

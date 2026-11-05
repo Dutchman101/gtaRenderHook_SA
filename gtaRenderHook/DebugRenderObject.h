@@ -8,7 +8,8 @@ class DebugRenderObject
 {
 public:
     DebugRenderObject();
-    ~DebugRenderObject();
+    // Virtual because the debug list owns derived objects and releases them through this type.
+    virtual ~DebugRenderObject();
     virtual void Render() = 0;
 };
 

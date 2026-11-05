@@ -109,7 +109,10 @@ float4 VolumetricSunlightPS( PS_QUAD_IN i ) : SV_TARGET
         i, LightDir, ViewPos, WorldPos,
         min( length( WorldPos - ViewPos ), RaymarchingDistance ) );
 
-    OutLighting.rgb = SunRays * SunRaysIntensity * vSunLightDir.w;
+    // ComputeSunRaysWithLighting already scales SunRayContrib, RayleighContrib and MieContrib by
+    // vSunLightDir.w, so that factor must not be applied a second time here: the daylight response has to stay
+    // linear, or the shafts collapse at dusk and night instead of fading out.
+    OutLighting.rgb = SunRays * SunRaysIntensity;
     OutLighting.a = 1;
 
     return OutLighting;

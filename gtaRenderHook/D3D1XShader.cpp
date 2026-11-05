@@ -158,6 +158,11 @@ HRESULT CD3D1XShader::CompileShaderFromFile(
     dwShaderFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
 #endif
     std::vector<D3D_SHADER_MACRO> defines;
+    // The list carries FEATURE_LEVEL and USE_PBR, so a compile cannot produce the variant the pipelines
+    // were built against without it. The list exists only between Start() and Stop(), so the missing case is
+    // reachable; returning the failure every caller already acts on is defined, dereferencing it is not.
+    if ( g_pGlobalShaderDefines == nullptr )
+        return E_FAIL;
     auto defineList = g_pGlobalShaderDefines->GetDefineList();
     // concat local defines at the end if they are provided
     if ( localShaderDefineList != nullptr )
@@ -229,7 +234,10 @@ CD3D1XVertexShader::CD3D1XVertexShader( std::string fileName,
 
     if ( FAILED( CompileShaderFromFile( fileName, entryPoint, shaderModel,
                                         &m_pBlob ) ) )
-        g_pDebug->printError( "The FX file cannot be compiled." );
+    {
+        g_pDebug->printError( "The FX file cannot be compiled: " + fileName + "/" + entryPoint );
+        return;
+    }
 
     auto pd3DDevice = GET_D3D_DEVICE;
     // Create shader
@@ -322,14 +330,20 @@ void CD3D1XPixelShader::ReSet()
 void CD3D1XPixelShader::Reload( CD3D1XShaderDefineList *localShaderDefineList )
 {
     // try to create shaders, if succeed than release old resources and set new
-    ID3D10Blob *       pBlob;
-    ID3D11PixelShader *pShader;
+    // Both are assigned on every path that reaches them, but they start as null so a future early exit cannot
+    // pick up an indeterminate value from the stack.
+    ID3D10Blob *       pBlob   = nullptr;
+    ID3D11PixelShader *pShader = nullptr;
     // recompile shader
     if ( !CALL_D3D_API_SILENT(
              CompileShaderFromFile( m_sFilePath, m_sEntryPoint, m_sShaderModel,
                                     &pBlob, localShaderDefineList ),
              "Pixel shader compilation error:" + m_sFilePath + "/" +
                  m_sEntryPoint ) )
+        return;
+    // A successful compile is expected to hand back a blob, but the two are separate contracts, so the blob is
+    // checked rather than assumed: dereferencing a null one here would fault inside the D3D call.
+    if ( pBlob == nullptr )
         return;
     // create shader resource
     if ( !CALL_D3D_API_SILENT( GET_D3D_DEVICE->CreatePixelShader(
@@ -377,7 +391,10 @@ CD3D1XComputeShader::CD3D1XComputeShader( std::string fileName,
 
     if ( FAILED( CompileShaderFromFile( fileName, entryPoint, shaderModel,
                                         &m_pBlob ) ) )
-        g_pDebug->printError( "The FX file cannot be compiled." );
+    {
+        g_pDebug->printError( "The FX file cannot be compiled: " + fileName + "/" + entryPoint );
+        return;
+    }
 
     auto pd3dDevice = GET_D3D_DEVICE;
     // Create shader
@@ -425,7 +442,10 @@ CD3D1XGeometryShader::CD3D1XGeometryShader( std::string fileName,
 
     if ( FAILED( CompileShaderFromFile( fileName, entryPoint, shaderModel,
                                         &m_pBlob ) ) )
-        g_pDebug->printError( "The FX file cannot be compiled." );
+    {
+        g_pDebug->printError( "The FX file cannot be compiled: " + fileName + "/" + entryPoint );
+        return;
+    }
 
     auto pd3dDevice = GET_D3D_DEVICE;
     // Create shader
@@ -473,7 +493,10 @@ CD3D1XHullShader::CD3D1XHullShader( std::string fileName,
 
     if ( FAILED( CompileShaderFromFile( fileName, entryPoint, shaderModel,
                                         &m_pBlob ) ) )
-        g_pDebug->printError( "The FX file cannot be compiled." );
+    {
+        g_pDebug->printError( "The FX file cannot be compiled: " + fileName + "/" + entryPoint );
+        return;
+    }
 
     auto pd3dDevice = GET_D3D_DEVICE;
     // Create shader
@@ -523,7 +546,10 @@ CD3D1XDomainShader::CD3D1XDomainShader( std::string fileName,
 
     if ( FAILED( CompileShaderFromFile( fileName, entryPoint, shaderModel,
                                         &m_pBlob ) ) )
-        g_pDebug->printError( "The FX file cannot be compiled." );
+    {
+        g_pDebug->printError( "The FX file cannot be compiled: " + fileName + "/" + entryPoint );
+        return;
+    }
 
     auto pd3dDevice = GET_D3D_DEVICE;
     // Create shader

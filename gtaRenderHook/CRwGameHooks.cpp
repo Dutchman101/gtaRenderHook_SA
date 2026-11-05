@@ -73,10 +73,12 @@ RwBool CRwGameHooks::SetRenderState( RwRenderState state, UINT param )
 
 RwBool CRwGameHooks::GetRenderState( RwRenderState nState, UINT* pParam )
 {
-    UINT rsData;
-    g_pRwCustomEngine->RenderStateGet( nState, rsData );
-    *pParam = rsData;
-    return true;
+    // RenderStateGet stores a result for every state it is handed, so the only case it cannot answer is a
+    // caller that passed no destination: that is refused here instead of being written through. Its own
+    // result is returned as it stands.
+    if ( pParam == nullptr )
+        return false;
+    return g_pRwCustomEngine->RenderStateGet( nState, *pParam );
 }
 
 void CRwGameHooks::SetRefreshRate( RwUInt32 refreshRate )
@@ -113,8 +115,28 @@ RwBool CRwGameHooks::Im2DRenderIndexedPrim( RwPrimitiveType primType, RwIm2DVert
 
 RwBool CRwGameHooks::Im2DRenderLine( RwIm2DVertex *vertices, RwInt32 numVertices, RwInt32 vert1, RwInt32 vert2 )
 {
-    // TODO: add line render func
-    return true;
+    // A line is a two-index line list, so it routes through the indexed path the engine already implements
+    // rather than through a separate line pipeline. Both endpoints are caller-supplied ordinals, so they are
+    // range-checked here: the indexed path trusts its indices and would read past the vertex array otherwise.
+    if ( vertices == nullptr || numVertices <= 0 )
+        return false;
+    // RwImVertexIndex is RwUInt16 and the indexed path uploads it straight into an R16_UINT buffer, so an
+    // ordinal above that range narrows to a different vertex and draws the line somewhere else instead of
+    // failing. numVertices reaches the tens of millions, so it cannot stand in as the bound for that cast.
+    // The parentheses around max keep the windows.h macro of the same name from expanding it, the same form
+    // the Im2D and Im3D upload bounds use.
+    const RwInt32 maxIndexValue = static_cast<RwInt32>( (std::numeric_limits<RwImVertexIndex>::max )() );
+    if ( vert1 < 0 || vert1 >= numVertices || vert1 > maxIndexValue ||
+         vert2 < 0 || vert2 >= numVertices || vert2 > maxIndexValue )
+        return false;
+
+    RwImVertexIndex indices[2] = { (RwImVertexIndex)vert1, (RwImVertexIndex)vert2 };
+    // The indexed path uploads numVertices vertices and grows the shared Im2D vertex buffer to that count, so
+    // handing it the caller's whole batch uploads every vertex and keeps the buffer that large for a draw that
+    // reads two entries. Only the vertices the two indices can reach are needed, and the index bound above
+    // already keeps that within 65536.
+    const RwInt32 usedVertices = ( vert1 > vert2 ? vert1 : vert2 ) + 1;
+    return g_pRwCustomEngine->Im2DRenderIndexedPrimitive( rwPRIMTYPELINELIST, vertices, usedVertices, indices, 2 );
 }
 
 void CRwGameHooks::Im3DOpen()

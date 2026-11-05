@@ -379,6 +379,7 @@ void CSAIdleHook::RenderForwardAfterDeferred()
     g_pDeferredRenderer->SetPreviousNonTonemappedFinalRaster();
     g_pDeferredRenderer->m_pShadowRenderer->SetShadowBuffer();
     CWaterLevel::RenderWater();
+    g_pDeferredRenderer->m_pShadowRenderer->UnsetShadowBuffer();
     DefinedState();
     renderer->EndDebugEvent();
 
@@ -389,6 +390,7 @@ void CSAIdleHook::RenderForwardAfterDeferred()
     g_pCustomBuildingPipe->RenderAlphaList();
     g_pCustomBuildingDNPipe->RenderAlphaList();
     BreakManager_c__Render( g_breakMan, 1 );
+    g_pDeferredRenderer->m_pShadowRenderer->UnsetShadowBuffer();
     renderer->EndDebugEvent();
 
     //CPostEffects__m_bDisableAllPostEffect = true;
@@ -557,6 +559,7 @@ void CSAIdleHook::RenderVoxelGI()
 
         m_uiDeferredStage = 4;
         CVoxelOctreeRenderer::InjectRadiance( g_pDeferredRenderer->m_pShadowRenderer->m_pShadowCamera->zBuffer, CRendererRH::RenderTOBJs, i - 1 );
+        g_pDeferredRenderer->m_pShadowRenderer->UnsetShadowBuffer();
 
     }
     CVoxelOctreeRenderer::FilterVoxelOctree();

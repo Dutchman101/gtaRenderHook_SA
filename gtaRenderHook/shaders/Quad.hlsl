@@ -37,3 +37,12 @@ float4 BlitPS(PS_QUAD_IN i) : SV_Target
 {
     return txPrevFrame.Sample(samLinear, i.vTexCoord.xy);
 }
+
+// Fills a depth-only target with the quad's own depth. BlitPS cannot do this: it samples txPrevFrame,
+// and the depth-only pass has no render target bound, so the read would return whatever the previous
+// pass left in slot t0 and the write would land nowhere. Writing the interpolated SV_Position.z keeps
+// the result correct under both depth conventions, because VS has already applied the reversed-Z flip.
+void DepthClearPS(PS_QUAD_IN i, out float fDepth : SV_Depth)
+{
+    fDepth = i.vPosition.z;
+}

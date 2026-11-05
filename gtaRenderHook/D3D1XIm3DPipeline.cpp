@@ -12,6 +12,12 @@
 #include <fstream>
 #include <iterator>
 
+// Update takes the upload size as an int, so a batch whose byte count does not fit that parameter
+// cannot be uploaded at all. Dividing the limit by the element size yields the largest count that
+// fits, and the division itself cannot wrap.
+static const size_t kIm3DMaxUploadVertices = static_cast<size_t>( (std::numeric_limits<int>::max )() ) / sizeof( RwIm3DVertex );
+static const size_t kIm3DMaxUploadIndices = static_cast<size_t>( (std::numeric_limits<int>::max )() ) / sizeof( RwImVertexIndex );
+
 CD3D1XIm3DPipeline::CD3D1XIm3DPipeline() :
 #ifndef DebuggingShaders
     CD3D1XPipeline( "RwIm3D" )
@@ -60,24 +66,63 @@ CD3D1XIm3DPipeline::CD3D1XIm3DPipeline() :
         m_pDeferredPS = new CD3D1XPixelShader( shaderPath, "DeferredPS" );
 }
 
-// RenderWare takes up to 65535 vertices and indices per Im3D batch. Plugins draw more than the initial 10000 (e.g. the
-// LOD lights of Project2DFX), so the buffers grow to fit a batch instead of being written past their end.
-void CD3D1XIm3DPipeline::EnsureCapacity( unsigned int vertexCount, unsigned int indexCount )
+// Plugins draw more than the initial 10000 vertices (e.g. the LOD lights of Project2DFX), so the buffers
+// grow to fit the batch instead of the upload being written past their end.
+// Returns whether the buffers now cover the request. A growth that fails leaves the old buffer in place,
+// and the upload clamps itself to it while the draw call keeps using the requested count, so the caller has
+// to drop the batch when this reports failure.
+bool CD3D1XIm3DPipeline::EnsureCapacity( unsigned int vertexCount, unsigned int indexCount )
 {
     if ( vertexCount > m_uiVertexCapacity )
     {
-        m_uiVertexCapacity = max( vertexCount, m_uiVertexCapacity * 2 );
+        const unsigned int grownCapacity = max( vertexCount, m_uiVertexCapacity * 2 );
+        // The replacement allocates, and that allocation is what reports a failed creation, so it is
+        // taken before anything is released: a throw here must leave the member naming the buffer it
+        // still owns rather than one that has already been freed.
+        CD3D1XDynamicVertexBuffer* grownBuffer = nullptr;
+        // The upload bound admits a count this 32 bit address space cannot serve, so the request is containable
+        // but not satisfiable. Catching it keeps the failure inside the module: the member still names the buffer
+        // it owns, the capacity is unchanged, and the false return is what makes the caller drop the batch.
+        try
+        {
+            grownBuffer = new CD3D1XDynamicVertexBuffer( sizeof( RwIm3DVertex ), grownCapacity );
+        }
+        catch ( ... )
+        {
+            g_pDebug->printError( "Im3D vertex batch dropped: the vertex buffer could not grow to fit it." );
+            return false;
+        }
+        // The state manager caches the bound buffer by pointer. Releasing the old buffer without
+        // clearing that slot lets a recycled address compare equal and skip the rebind, leaving a
+        // released ID3D11Buffer bound for the next draw.
+        g_pStateMgr->SetVertexBuffer( nullptr, 0, 0 );
         delete m_pVertexBuffer;
-        m_pVertexBuffer = new CD3D1XDynamicVertexBuffer( sizeof( RwIm3DVertex ), m_uiVertexCapacity );
+        m_pVertexBuffer = grownBuffer;
+        m_uiVertexCapacity = grownCapacity;
         m_pVertexBuffer->SetDebugName( "Im3D_DynamicVB" );
     }
     if ( indexCount > m_uiIndexCapacity )
     {
-        m_uiIndexCapacity = max( indexCount, m_uiIndexCapacity * 2 );
+        const unsigned int grownCapacity = max( indexCount, m_uiIndexCapacity * 2 );
+        CD3D1XDynamicIndexBuffer* grownBuffer = nullptr;
+        // Same containment as the vertex buffer above, reported separately so the failing buffer is named.
+        try
+        {
+            grownBuffer = new CD3D1XDynamicIndexBuffer( grownCapacity );
+        }
+        catch ( ... )
+        {
+            g_pDebug->printError( "Im3D index batch dropped: the index buffer could not grow to fit it." );
+            return false;
+        }
+        // SetIndexBuffer compares the same cached pointer, so the slot is cleared for the same reason.
+        g_pStateMgr->SetIndexBuffer( nullptr );
         delete m_pIndexBuffer;
-        m_pIndexBuffer = new CD3D1XDynamicIndexBuffer( m_uiIndexCapacity );
+        m_pIndexBuffer = grownBuffer;
+        m_uiIndexCapacity = grownCapacity;
         m_pIndexBuffer->SetDebugName( "Im3D_DynamicIB" );
     }
+    return true;
 }
 
 
@@ -91,7 +136,7 @@ CD3D1XIm3DPipeline::~CD3D1XIm3DPipeline()
 
 RwBool CD3D1XIm3DPipeline::SubmitNode()
 {
-    if ( rwD3D9ImmPool == nullptr || rwD3D9ImmPool->elements == nullptr || rwD3D9ImmPool->numElements == 0 )
+    if ( rwD3D9ImmPool == nullptr || rwD3D9ImmPool->elements == nullptr || rwD3D9ImmPool->numElements <= 0 )
         return true;
     ID3D11DeviceContext* pImmediateContext = GET_D3D_CONTEXT;
     //rwIm3DPool* pool = rwD3D9ImmPool;
@@ -99,9 +144,22 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
 
     if ( im3dPoolStash.primType != rwPRIMTYPETRIFAN )
     {
-        EnsureCapacity( rwD3D9ImmPool->numElements, im3dPoolStash.indices ? im3dPoolStash.numIndices : 0 );
+        // RenderWare hands over signed counts, and widening a negative one would size both the buffer
+        // request and the upload at roughly 4 G elements, so the counts are validated here once and
+        // every later use, including the two upload sizes and both draw calls, reads the result.
+        const unsigned int vertexCount = static_cast<unsigned int>( rwD3D9ImmPool->numElements );
+        const unsigned int indexCount = im3dPoolStash.indices != nullptr && im3dPoolStash.numIndices > 0
+            ? static_cast<unsigned int>( im3dPoolStash.numIndices ) : 0u;
+        if ( vertexCount > kIm3DMaxUploadVertices || indexCount > kIm3DMaxUploadIndices )
+        {
+            g_pDebug->printError( "Im3D batch dropped: its upload size does not fit the upload size parameter." );
+            return true;
+        }
+        const bool hasIndices = indexCount != 0;
+        if ( !EnsureCapacity( vertexCount, indexCount ) )
+            return true;
         // update verticles
-        m_pVertexBuffer->Update( &( (RwIm3DVertex*)rwD3D9ImmPool->elements )[0], sizeof( RwIm3DVertex )*rwD3D9ImmPool->numElements );
+        m_pVertexBuffer->Update( &( (RwIm3DVertex*)rwD3D9ImmPool->elements )[0], sizeof( RwIm3DVertex )*vertexCount );
         // initialize vertex declaration and buffer
         g_pStateMgr->SetInputLayout( m_pVertexDeclaration->getInputLayout() );
         g_pStateMgr->SetVertexBuffer( m_pVertexBuffer->getBuffer(), sizeof( RwIm3DVertex ), 0 );
@@ -120,21 +178,21 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
         else
             m_pPS->Set();
         // draw mesh
-        if ( im3dPoolStash.indices && im3dPoolStash.numIndices > 0 )
+        if ( hasIndices )
         {
             // update index buffer
-            m_pIndexBuffer->Update( &im3dPoolStash.indices[0], sizeof( RwImVertexIndex )*im3dPoolStash.numIndices );
+            m_pIndexBuffer->Update( &im3dPoolStash.indices[0], sizeof( RwImVertexIndex )*indexCount );
             // initialize vertex buffer
             g_pStateMgr->SetIndexBuffer( m_pIndexBuffer->getBuffer() );
 
             g_pStateMgr->FlushStates();
-            pImmediateContext->DrawIndexed( im3dPoolStash.numIndices, 0, 0 );
+            pImmediateContext->DrawIndexed( indexCount, 0, 0 );
             g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
         }
         else
         {
             g_pStateMgr->FlushStates();
-            pImmediateContext->Draw( rwD3D9ImmPool->numElements, 0 );
+            pImmediateContext->Draw( vertexCount, 0 );
             g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
         }
     }

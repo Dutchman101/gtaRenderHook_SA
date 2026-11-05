@@ -12,7 +12,10 @@ inline bool CALL_D3D_API( HRESULT callResult, const std::string& errorMessage )
         g_pDebug->printMsg( errorMessage, 0 );
         // TODO: add more readable results(for ex. convert HRESULT to string, based on result description)
         g_pDebug->printError( "ERROR_CODE:" + std::to_string( callResult ) + "\n" );
-        return false;
+        // The hard stop belongs here, not in printError: several call sites use this wrapper without
+        // inspecting the result, and they depend on a failed Direct3D call terminating the process
+        // rather than continuing with a half-created resource.
+        throw std::runtime_error( errorMessage );
     }
     return true;
 }

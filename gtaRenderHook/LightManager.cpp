@@ -50,11 +50,16 @@ void CLightManager::SortByDistance( const RwV3d& from )
 
 void CLightManager::Update()
 {
+    const int activeLightCount = min( m_nLightCount, 16 );
     for ( auto i = 0; i < 16; i++ )
-        m_pLightBuffer->data.m_aLights[i] = m_aLights[i];
+    {
+        // Only the first activeLightCount entries hold this frame's lights; the rest must be
+        // cleared rather than carrying stale lights from earlier frames into the GPU buffer.
+        m_pLightBuffer->data.m_aLights[i] = i < activeLightCount ? m_aLights[i] : CLight();
+    }
 
     m_pLightBuffer->Update();
-    g_pStateMgr->SetLightCount( min( m_nLightCount, 16 ) );
+    g_pStateMgr->SetLightCount( activeLightCount );
 }
 
 CD3D1XConstantBuffer<LightsCB> * CLightManager::GetBuffer()

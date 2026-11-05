@@ -15,12 +15,25 @@
 #include "D3D1XRenderBuffersManager.h"
 #include "D3D1XShader.h"
 #include "FullscreenQuad.h"
-RW::BBox	CShadowRenderer::m_LightBBox[4];
-RwV3d	CShadowRenderer::m_LightPos[4];
-RW::Matrix	CShadowRenderer::m_LightSpaceMatrix[4];
-RW::Matrix	CShadowRenderer::m_InvLightSpaceMatrix[4];
-RW::V3d CShadowRenderer::m_vFrustumCorners[4][8];
+RW::BBox	CShadowRenderer::m_LightBBox[kMaxShadowCascades];
+RwV3d	CShadowRenderer::m_LightPos[kMaxShadowCascades];
+RW::Matrix	CShadowRenderer::m_LightSpaceMatrix[kMaxShadowCascades];
+RW::Matrix	CShadowRenderer::m_InvLightSpaceMatrix[kMaxShadowCascades];
+RW::V3d CShadowRenderer::m_vFrustumCorners[kMaxShadowCascades][8];
 ShadowSettingsBlock gShadowSettings;
+
+// The shaders declare their own shadow constants with four cascade slots, so the bound in
+// ShadowRenderer.h cannot move without the shaders moving with it.
+static_assert( sizeof( CBShadows::ViewProj ) / sizeof( CBShadows::ViewProj[0] ) == 4,
+               "shadow cbuffer layout and the shaders assume four cascades" );
+static_assert( sizeof( CBShadows::FadeDistances ) / sizeof( float ) == kMaxShadowCascades + 1,
+               "fade distances need one boundary per cascade plus the far edge" );
+static_assert( sizeof( CBShadows::ShadowBias ) / sizeof( float ) == kMaxShadowCascades,
+               "shadow bias entries must match the cascade count" );
+static_assert( sizeof( ShadowSettingsBlock::BiasCoefficients ) / sizeof( float ) == kMaxShadowCascades,
+               "one bias coefficient per cascade, indexed by cascade ID minus one" );
+static_assert( sizeof( ShadowSettingsBlock::DistanceCoefficients ) / sizeof( float ) == kMaxShadowCascades - 1,
+               "every cascade after the first has a start distance multiplier" );
 
 CShadowRenderer::CShadowRenderer()
 {
@@ -30,8 +43,10 @@ CShadowRenderer::CShadowRenderer()
     RwCameraSetNearClipPlane( m_pShadowCamera, -150 );
     RwCameraSetFarClipPlane( m_pShadowCamera, 1500 );
     RwCameraSetRaster( m_pShadowCamera, nullptr );
-    int maxTexSize;
-    if ( g_pRwCustomEngine->GetMaxTextureSize( maxTexSize ) )
+    int maxTexSize = 0;
+    // The engine reports zero for a feature level it does not list, and treating that as a bound would ask for a
+    // zero wide atlas whose raster nothing can dereference. Same floor as Load and the size callback apply.
+    if ( g_pRwCustomEngine->GetMaxTextureSize( maxTexSize ) && maxTexSize >= 16 )
         gShadowSettings.Size = (UINT)min( (int)gShadowSettings.Size, maxTexSize / gShadowSettings.ShadowCascadeCount );
     RwCameraSetZRaster( m_pShadowCamera, RwRasterCreate( gShadowSettings.Size * gShadowSettings.ShadowCascadeCount, gShadowSettings.Size, 32, rwRASTERTYPEZBUFFER | rwRASTERFORMAT32 ) );
     vw.x = vw.y = 40;
@@ -40,12 +55,13 @@ CShadowRenderer::CShadowRenderer()
     RwObjectHasFrameSetFrame( m_pShadowCamera, RwFrameCreate() );
     RpWorldAddCamera( Scene.m_pRpWorld, m_pShadowCamera );
     m_pLightViewProj = nullptr;
-    // any pixel shader will do for clearing a depth-only target; the blit shader is always available
-    m_pDepthClearPS = new CD3D1XPixelShader( "shaders/Quad.hlsl", "BlitPS" );
+    // The depth clear samples nothing, so it must not be BlitPS: that entry point reads txPrevFrame, which the
+    // depth-only pass leaves unbound.
+    m_pDepthClearPS = new CD3D1XPixelShader( "shaders/Quad.hlsl", "DepthClearPS" );
 
     m_pLightCB = new CD3D1XConstantBuffer<CBShadows>();
     m_pLightCB->SetDebugName( "ShadowsCB" );
-    for ( int i = 0; i < 5; i++ )
+    for ( int i = 0; i < kMaxShadowCascades + 1; i++ )
         m_fShadowDistances[i] = 0.0f;
 }
 
@@ -73,6 +89,12 @@ RW::V3d CShadowRenderer::CalculateCameraPos( RwCamera* mainCam, const RW::V3d & 
     vLightBasis[2] = -lightDir;
     vLightBasis[2].normalize();
     vLightBasis[1] = { 0, 1, 0 };
+    // The cross product collapses when the light direction runs along the reference up vector,
+    // so fall back to another reference axis to keep the basis orthonormal instead of NaN.
+    // The guard already proves the light direction lies within about 0.81 degrees of the Y axis, so
+    // the X axis is at most 0.0142 away from it and is always a safe fallback.
+    if ( fabsf( vLightBasis[1].dot( vLightBasis[2] ) ) > 0.9999f )
+        vLightBasis[1] = RW::V3d{ 1, 0, 0 };
     vLightBasis[0] = vLightBasis[1].cross( vLightBasis[2] );
     vLightBasis[0].normalize();
     vLightBasis[1] = vLightBasis[0].cross( vLightBasis[2] );
@@ -97,7 +119,10 @@ RW::V3d CShadowRenderer::CalculateCameraPos( RwCamera* mainCam, const RW::V3d & 
     // and far corners are equally far away.
     const RwReal halfDiag = sqrtf( mainCam->viewWindow.x * mainCam->viewWindow.x + mainCam->viewWindow.y * mainCam->viewWindow.y );
     const RwReal nearRadius = halfDiag * fNear, farRadius = halfDiag * fFar;
-    RwReal centerDist = ( fFar * fFar + farRadius * farRadius - fNear * fNear - nearRadius * nearRadius ) / ( 2.0f * ( fFar - fNear ) );
+    RwReal centerDist = fNear;
+    // A slice whose near and far distances coincide would divide by zero here.
+    if ( fFar - fNear > 1e-4f )
+        centerDist = ( fFar * fFar + farRadius * farRadius - fNear * fNear - nearRadius * nearRadius ) / ( 2.0f * ( fFar - fNear ) );
     centerDist = min( max( centerDist, fNear ), fFar );
     RwReal radius = max( sqrtf( ( centerDist - fNear ) * ( centerDist - fNear ) + nearRadius * nearRadius ),
                          sqrtf( ( fFar - centerDist ) * ( fFar - centerDist ) + farRadius * farRadius ) );
@@ -186,7 +211,7 @@ void CShadowRenderer::SelectCascadesToUpdate( const RW::V3d &lightDir )
     m_bForceFullUpdate = false;
     // the first two cascades cover the view up close, where moving objects and their shadows are; further cascades
     // take turns, so a frame never re-renders more than one of them when the interval is at least their count
-    for ( int i = 0; i < 4; i++ )
+    for ( int i = 0; i < kMaxShadowCascades; i++ )
         m_bCascadeUpdated[i] = full || i < 2 || ( m_uiFrame + i ) % interval == 0;
     m_uiFrame++;
 }
@@ -287,13 +312,32 @@ void CShadowRenderer::SetShadowBuffer() const
     // If shadow rendering has not ended we don't need to set shadow buffer
     m_pLightCB->data.ShadowSize = gShadowSettings.Size;
     m_pLightCB->data.CascadeCount = gShadowSettings.ShadowCascadeCount;
-    for ( auto i = 0; i < 4; i++ )
+    for ( auto i = 0; i < kMaxShadowCascades; i++ )
         m_pLightCB->data.ShadowBias[i] = gShadowSettings.BiasCoefficients[i];
     m_pLightCB->Update();
     g_pStateMgr->SetConstantBufferPS( m_pLightCB, 4 );
     //g_pStateMgr->SetConstantBufferCS(m_pLightCB, 4);
+    // Border addressing is what the PCSS blocker search needs: a tap outside the cascade has to read the far
+    // plane instead of wrapping to the opposite edge. It is captured here because samLinear is shared with
+    // every later pass, which expects whatever mode the surrounding render had set.
+    m_eSavedAddressU = g_pStateMgr->GetTextureAdressU();
+    m_eSavedAddressV = g_pStateMgr->GetTextureAdressV();
+    m_eSavedAddressW = g_pStateMgr->GetTextureAdressW();
     g_pStateMgr->SetTextureAdressUV( rwTEXTUREADDRESSBORDER );
     g_pStateMgr->SetRaster( m_pShadowCamera->zBuffer, 4 );
+}
+
+void CShadowRenderer::UnsetShadowBuffer() const
+{
+    // Slot 4 is declared twice in Deferred.hlsl (txShadow and txLighting), so it must not keep pointing at the
+    // shadow atlas once the lighting passes are done: FinalPassPS reads it as the lighting raster.
+    g_pStateMgr->SetRaster( nullptr, 4 );
+    // SetTextureAdressUV writes U, V and W, so the unbind has to put back all three. W is the coordinate the
+    // 3D lookup passes read: samLinear addresses a Texture3D through it, so leaving it on border addressing
+    // makes every volume sample outside 0-1 read as zero instead of tiling.
+    g_pStateMgr->SetTextureAdressU( m_eSavedAddressU );
+    g_pStateMgr->SetTextureAdressV( m_eSavedAddressV );
+    g_pStateMgr->SetTextureAdressW( m_eSavedAddressW );
 }
 
 void CShadowRenderer::CalculateShadowDistances( const RwReal fNear, const RwReal fFar )
@@ -326,10 +370,10 @@ void CShadowRenderer::CalculateShadowDistances( const RwReal fNear, const RwReal
             const float t = static_cast<float>( i ) / count;
             m_fShadowDistances[i] = lambda * splitNear * powf( splitFar / splitNear, t ) + ( 1.0f - lambda ) * ( splitNear + ( splitFar - splitNear ) * t );
         }
-        for ( int i = count + 1; i < 5; i++ )
+        for ( int i = count + 1; i < kMaxShadowCascades + 1; i++ )
             m_fShadowDistances[i] = splitFar;
     }
-    for ( int i = 0; i < 5; i++ )
+    for ( int i = 0; i < kMaxShadowCascades + 1; i++ )
         m_pLightCB->data.FadeDistances[i] = m_fShadowDistances[i];
 }
 
@@ -366,7 +410,7 @@ tinyxml2::XMLElement * ShadowSettingsBlock::Save( tinyxml2::XMLDocument * doc )
     shadowSettingsNode->SetAttribute( "Size", gShadowSettings.Size );
     shadowSettingsNode->SetAttribute( "ShadowCascadeCount", gShadowSettings.ShadowCascadeCount );
 
-    for ( size_t i = 0; i < 4; i++ )
+    for ( int i = 0; i < kMaxShadowCascades; i++ )
     {
         auto shadowCascadesSettingsNode = doc->NewElement( "Cascade" );
         shadowCascadesSettingsNode->SetAttribute( "ID", i + 1 );
@@ -384,25 +428,57 @@ void ShadowSettingsBlock::Load( const tinyxml2::XMLDocument & doc )
 {
     SettingsBlock::Load( doc );
     auto shadowSettingsNode = doc.FirstChildElement( m_sName.c_str() );
-    // Shadows
-
-    Size = shadowSettingsNode->IntAttribute( "Size", 1024 );
-    ShadowCascadeCount = max( min( shadowSettingsNode->IntAttribute( "ShadowCascadeCount", 3 ), 4 ), 1 );
-
-    // Read 4 shadow cascade parameters
-    auto shadowCascadeNode = shadowSettingsNode->FirstChildElement();
-    int id = shadowCascadeNode->IntAttribute( "ID" );
-    if ( id != 1 )
-        DistanceCoefficients[id - 2] = shadowCascadeNode->FloatAttribute( "StartDistanceMultiplier" );
-    BiasCoefficients[id - 1] = shadowCascadeNode->FloatAttribute( "BiasCoefficients" );
-    for ( size_t i = 1; i < 4; i++ )
+    // A settings file without a Shadows element has to keep the defaults instead of
+    // dereferencing a missing node. The defaults are re-established rather than left as they are,
+    // so a reload with the element removed restores them instead of keeping whatever the earlier
+    // load or the tweak bar left in Size, the coefficient tables and ShadowCascadeCount.
+    if ( shadowSettingsNode == nullptr )
     {
-        shadowCascadeNode = shadowCascadeNode->NextSiblingElement( "Cascade" );
-        id = shadowCascadeNode->IntAttribute( "ID" );
-        if ( id != 1 )
-            DistanceCoefficients[id - 2] = shadowCascadeNode->FloatAttribute( "StartDistanceMultiplier" );
-        BiasCoefficients[id - 1] = shadowCascadeNode->FloatAttribute( "BiasCoefficients" );
+        Reset();
     }
+    else
+    {
+        // Size is a divisor for the cascade-count clamp and for the texel size, and it sizes the shadow
+        // raster, so a settings file value below the tweak bar's minimum is rejected here as well.
+        Size = (UINT)max( shadowSettingsNode->IntAttribute( "Size", 1024 ), 16 );
+        ShadowCascadeCount = max( min( shadowSettingsNode->IntAttribute( "ShadowCascadeCount", 3 ), kMaxShadowCascades ), 1 );
+
+        // Read up to 4 cascade parameter sets in document order. Each node is keyed by its ID
+        // attribute, which has to be range checked before it indexes the coefficient tables.
+        int parsedCascades = 0;
+        for ( auto shadowCascadeNode = shadowSettingsNode->FirstChildElement( "Cascade" );
+              shadowCascadeNode != nullptr && parsedCascades < kMaxShadowCascades;
+              shadowCascadeNode = shadowCascadeNode->NextSiblingElement( "Cascade" ) )
+        {
+            const int id = shadowCascadeNode->IntAttribute( "ID" );
+            // An out of range ID cannot index the tables, so the node is skipped without spending one of the
+            // four cascade slots: charging it one would drop a valid cascade behind it.
+            if ( id < 1 || id > kMaxShadowCascades )
+                continue;
+            if ( id != 1 )
+                DistanceCoefficients[id - 2] = shadowCascadeNode->FloatAttribute( "StartDistanceMultiplier", DistanceCoefficients[id - 2] );
+            BiasCoefficients[id - 1] = shadowCascadeNode->FloatAttribute( "BiasCoefficients", BiasCoefficients[id - 1] );
+            parsedCascades++;
+        }
+    }
+
+    // Both branches choose the two values that size the atlas, so the device limit and the rebuild request
+    // belong to this shared tail rather than to the file branch: the restored defaults size the atlas exactly
+    // as a file value does, and a reload that changed either value leaves the existing raster at its old extent
+    // while every consumer reads the new ones. The atlas is Size * ShadowCascadeCount wide by Size tall, so the
+    // limit the constructor and the tweak bar size callback enforce has to be re-applied here as well.
+    int maxTexSize = 0;
+    const bool deviceLimitKnown =
+        g_pRwCustomEngine != nullptr && g_pRwCustomEngine->GetMaxTextureSize( maxTexSize ) && maxTexSize >= 16;
+    if ( deviceLimitKnown )
+        Size = (UINT)max( min( (int)Size, maxTexSize / ShadowCascadeCount ), 16 );
+    // The rebuild multiplies the two values into the raster width, so it is only requested once that product is
+    // device bounded. The query needs an engine and DllMain loads the file before one exists, so a missing engine
+    // leaves the constructor to it. Only the renderer created after startup is reachable here, which is why the
+    // whole chain is null checked.
+    if ( deviceLimitKnown && g_pDeferredRenderer != nullptr &&
+         g_pDeferredRenderer->m_pShadowRenderer != nullptr )
+        g_pDeferredRenderer->m_pShadowRenderer->m_bRequiresReloading = true;
 }
 
 void ShadowSettingsBlock::Reset()
@@ -421,9 +497,12 @@ void ShadowSettingsBlock::Reset()
 }
 void TW_CALL SetShadowSizeCallback( const void *value, void *clientData )
 {
-    int maxTexSize;
-    g_pRwCustomEngine->GetMaxTextureSize( maxTexSize );
-    gShadowSettings.Size = max( min( *(int*)value, maxTexSize / gShadowSettings.ShadowCascadeCount ), 16 );
+    // A failed device query leaves maxTexSize indeterminate, and dividing that would clamp the atlas size to
+    // whatever the stack slot held, so the limit only applies when the query succeeded.
+    int maxTexSize = 0;
+    gShadowSettings.Size = (UINT)max( *(int*)value, 16 );
+    if ( g_pRwCustomEngine != nullptr && g_pRwCustomEngine->GetMaxTextureSize( maxTexSize ) && maxTexSize >= 16 )
+        gShadowSettings.Size = (UINT)max( min( (int)gShadowSettings.Size, maxTexSize / gShadowSettings.ShadowCascadeCount ), 16 );
     g_pDeferredRenderer->m_pShadowRenderer->m_bRequiresReloading = true;
 }
 void TW_CALL GetShadowSizeCallback( void *value, void *clientData )
@@ -432,9 +511,12 @@ void TW_CALL GetShadowSizeCallback( void *value, void *clientData )
 }
 void TW_CALL SetCascadeCountCallback( const void *value, void *clientData )
 {
-    int maxTexSize;
-    g_pRwCustomEngine->GetMaxTextureSize( maxTexSize );
-    gShadowSettings.ShadowCascadeCount = max( min( *(int*)value, maxTexSize / (int)gShadowSettings.Size ), 1 );
+    // Same reason as SetShadowSizeCallback: an uninitialised maxTexSize would divide into the cascade count.
+    int maxTexSize = 0;
+    gShadowSettings.ShadowCascadeCount = *(int*)value;
+    if ( g_pRwCustomEngine != nullptr && g_pRwCustomEngine->GetMaxTextureSize( maxTexSize ) && maxTexSize >= 16 )
+        gShadowSettings.ShadowCascadeCount = min( gShadowSettings.ShadowCascadeCount, maxTexSize / (int)max( gShadowSettings.Size, 16u ) );
+    gShadowSettings.ShadowCascadeCount = max( min( gShadowSettings.ShadowCascadeCount, kMaxShadowCascades ), 1 );
     g_pDeferredRenderer->m_pShadowRenderer->m_bRequiresReloading = true;
 }
 void TW_CALL GetCascadeCountCallback( void *value, void *clientData )
@@ -444,18 +526,24 @@ void TW_CALL GetCascadeCountCallback( void *value, void *clientData )
 void ShadowSettingsBlock::InitGUI( TwBar * bar )
 {
     SettingsBlock::InitGUI( bar );
-    int maxTexSize;
-    std::string shadowSettings = "min=16 max=";
+    int maxTexSize = 0;
+    // AntTweakBar keeps reading the definition text after this call returns and its implementation is not part
+    // of this tree, so the buffer is held in static storage for the same reason the cascade range below is.
+    static std::string shadowSettings;
+    shadowSettings = "min=16 max=";
     if ( !g_pRwCustomEngine->GetMaxTextureSize( maxTexSize ) )
         shadowSettings += "1024";
     else
-        shadowSettings += to_string( maxTexSize / 2 );
+        shadowSettings += to_string( max( maxTexSize / 2, 16 ) );
     shadowSettings += " step=2 help='Shadow map size, higher - less pixelation/blurry shadows, lower - higher performance' group=Shadows";
     TwAddVarCB( bar, "Cascade Size", TwType::TW_TYPE_UINT32,
                 SetShadowSizeCallback, GetShadowSizeCallback, nullptr, shadowSettings.c_str() );
 
+    // AntTweakBar parses the definition text it is given here, but its implementation is not part of this tree, so the
+    // buffer outlives the call the same way the literal it replaced did.
+    static const std::string cascadeRange = "min=1 max=" + to_string( kMaxShadowCascades ) + " help='meh' group=Shadows";
     TwAddVarCB( bar, "Cascade count", TwType::TW_TYPE_INT32,
-                SetCascadeCountCallback, GetCascadeCountCallback, nullptr, "min=1 max=4 help='meh' group=Shadows" );
+                SetCascadeCountCallback, GetCascadeCountCallback, nullptr, cascadeRange.c_str() );
 
     TwAddVarRW( bar, "Distance multipier 1", TwType::TW_TYPE_FLOAT,
                 &DistanceCoefficients[0],

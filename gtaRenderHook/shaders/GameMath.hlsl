@@ -77,6 +77,8 @@ float3 ConvertFromVoxelSpace( float3 p, float scale )
 // Converts uint to rgba.
 float4 UINTtoRGBA( uint color )
 {
+    // color is a RenderWare D3DCOLOR packed as 0xAARRGGBB, so alpha comes out of >>24 and red out of >>16.
+    // The shifts below are that byte order read out; they must not be swapped to an RGBA reading.
     if ( color == 0xffffffff )
         return float4( 1, 1, 1, 1 );
 
@@ -121,7 +123,10 @@ float Bayer4x4( float2 index )
 {
     const float4x4 Bayer = { float4( 1, 13, 4, 16 ), float4( 9, 5, 12, 8 ),
                              float4( 3, 15, 2, 14 ), float4( 11, 7, 10, 6 ) };
-    return Bayer[index.x % 4][index.y % 4] * 0.0625;
+    // Screen positions arrive as pixel centres (x.5), so the coordinates have to be truncated
+    // to integers before the 4x4 lookup; a floating point remainder lands on wrong cells.
+    const uint2 cell = uint2( index ) & 3;
+    return Bayer[cell.x][cell.y] * 0.0625;
 }
 
 // expects integer-stepped values (e.g. position)

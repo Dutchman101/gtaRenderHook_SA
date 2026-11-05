@@ -3,7 +3,6 @@
 #include "LightingFunctions.hlsl"
 #include "GBuffer.hlsl"
 #include "VoxelGI.hlsl"
-#include "Shadows.hlsl"
 //--------------------------------------------------------------------------------------
 // Variables
 //--------------------------------------------------------------------------------------
@@ -69,11 +68,11 @@ float4 SunLightingPS(PS_QUAD_IN i) : SV_Target
 
     const float3 ViewPos = mViewInv[3].xyz;
 
-    clip(vSunLightDir.w <= 0.0f);
+    clip(vSunLightDir.w);
 
     float4 AlbedoColor = txGB0.Sample(samLinear, i.vTexCoord.xy);
 
-	clip(length(AlbedoColor) <= 0);
+	clip(length(AlbedoColor));
 
 	float3 Normals;
 	float ViewZ;
@@ -102,7 +101,7 @@ float4 SunLightingPS(PS_QUAD_IN i) : SV_Target
 #if SAMPLE_SHADOWS==1
     float ShadowTerm = SampleShadowCascades(txShadow, samShadow, samLinear, WorldPos, Distance) * vSunLightDir.w;
 #else
-    float ShadowTerm = 1.0;
+    float ShadowTerm = vSunLightDir.w;
 #endif
 
     float2 Lighting = float2(DiffuseTerm, SpecularTerm * SpecIntensity) * ShadowTerm;
@@ -136,7 +135,7 @@ float4 PointLightingPS(PS_QUAD_IN i) : SV_Target
     const float3 ViewPos = mViewInv[3].xyz;
 
     float4 AlbedoColor = txGB0.Sample(samLinear, i.vTexCoord.xy);
-	clip(AlbedoColor.a <= 0);
+	clip(AlbedoColor.a);
     
     float4 Parameters = txGB2.Sample(samLinear, i.vTexCoord.xy);
 

@@ -1074,7 +1074,7 @@ bool CRwD3DEngine::Im2DRenderPrimitive( RwPrimitiveType primType,
                                         RwIm2DVertex *  vertices,
                                         RwInt32         numVertices )
 {
-    RwRaster *raster;
+    RwRaster *raster = nullptr;
     void *    vertexData = nullptr;
     int       primCount;
     if ( dgGGlobals )
@@ -1087,6 +1087,13 @@ bool CRwD3DEngine::Im2DRenderPrimitive( RwPrimitiveType primType,
     case rwPRIMTYPETRISTRIP:
     case rwPRIMTYPETRIFAN: primCount = numVertices - 2; break;
     default: primCount = 0; break;
+    }
+    // dgGGlobals is cleared on camera end update, so the raster can be absent here; without this
+    // check the offset test below reads a pointer nobody set.
+    if ( raster == nullptr )
+    {
+        m_pDebug->printError( "Im2D primitive refused: the framebuffer raster is unavailable." );
+        return false;
     }
     if ( m_useOwnVertexBuffer )
     {
@@ -1116,7 +1123,13 @@ bool CRwD3DEngine::Im2DRenderPrimitive( RwPrimitiveType primType,
             memcpy( vertexData, vertices,
                     4 * ( ( sizeof( RwIm2DVertex ) * numVertices ) >> 2 ) );
         else
-            m_pDebug->printError( "raster has offsets!" );
+        {
+            // The buffer is mapped here, so it has to be released before the refusal; leaving it
+            // mapped makes every later Lock on it fail.
+            m_pDebug->printError( "Im2D primitive refused: the raster has non-zero offsets, which the vertex copy does not apply." );
+            m_currentVertexBuffer->Unlock();
+            return false;
+        }
         m_currentVertexBuffer->Unlock();
         m_im2DRenderFlush();
         m_pDebug->printMsg( "Base index:" + to_string( m_currentBaseIndex ) );

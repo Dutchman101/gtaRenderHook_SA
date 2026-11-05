@@ -9,6 +9,11 @@
 #include "D3D1XRenderBuffersManager.h"
 #include "RwD3D1XEngine.h"
 WaterSettingsBlock gWaterSettings;
+// The upload buffers are created once at a fixed size and mapped every frame, so these sizes are the one
+// source for both the creation below and the fit check in RenderWater.
+static const UINT kWaterVertexBufferBytes = 0x40000;
+static const UINT kWaterIndexBufferBytes = 20000;
+
 CCustomWaterPipeline::CCustomWaterPipeline() :
 #ifndef DebuggingShaders
     CD3D1XPipeline( "SACustomWater" )
@@ -28,32 +33,40 @@ CCustomWaterPipeline::CCustomWaterPipeline() :
     UINT numElements = ARRAYSIZE( layout );
     ID3DBlob* vsBlob = m_pVS->getBlob();
     // Create the input layout
-    if ( FAILED( pd3dDevice->CreateInputLayout( layout, numElements, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &m_pVertexLayout ) ) )
-        g_pDebug->printError( "Failed to create input layout" );
+    if ( vsBlob == nullptr )
+        g_pDebug->printError( "Water input layout skipped: the vertex shader did not compile." );
+    else
+    {
+        const HRESULT layoutResult = pd3dDevice->CreateInputLayout( layout, numElements, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &m_pVertexLayout );
+        if ( FAILED( layoutResult ) )
+            g_pDebug->printError( "Water input layout: CreateInputLayout failed with " + std::to_string( layoutResult ) + "." );
+    }
 
 
     D3D11_BUFFER_DESC bd;
     ZeroMemory( &bd, sizeof( bd ) );
     bd.Usage = D3D11_USAGE_DYNAMIC;
-    bd.ByteWidth = 0x40000;
+    bd.ByteWidth = kWaterVertexBufferBytes;
     bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
     bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     bd.MiscFlags = 0;
     bd.StructureByteStride = 0;
 
-    if ( FAILED( pd3dDevice->CreateBuffer( &bd, nullptr, &m_pVertexBuffer ) ) )
-        g_pDebug->printError( "Failed to create vertex buffer" );
+    const HRESULT vertexBufferResult = pd3dDevice->CreateBuffer( &bd, nullptr, &m_pVertexBuffer );
+    if ( FAILED( vertexBufferResult ) )
+        g_pDebug->printError( "Water upload vertex buffer: CreateBuffer failed with " + std::to_string( vertexBufferResult ) + "." );
 
     ZeroMemory( &bd, sizeof( bd ) );
     bd.Usage = D3D11_USAGE_DYNAMIC;
-    bd.ByteWidth = 20000;
+    bd.ByteWidth = kWaterIndexBufferBytes;
     bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
     bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     bd.MiscFlags = 0;
     bd.StructureByteStride = 0;
 
-    if ( FAILED( pd3dDevice->CreateBuffer( &bd, nullptr, &m_pIndexBuffer ) ) )
-        g_pDebug->printError( "Failed to create index buffer" );
+    const HRESULT indexBufferResult = pd3dDevice->CreateBuffer( &bd, nullptr, &m_pIndexBuffer );
+    if ( FAILED( indexBufferResult ) )
+        g_pDebug->printError( "Water upload index buffer: CreateBuffer failed with " + std::to_string( indexBufferResult ) + "." );
     m_pDS = new CD3D1XDomainShader( "shaders/SACustomWater.hlsl", "DS" );
     m_pHS = new CD3D1XHullShader( "shaders/SACustomWater.hlsl", "HS" );
 }
@@ -72,6 +85,20 @@ void CCustomWaterPipeline::RenderWater( RwIm3DVertex * verticles, UINT vertexCou
 {
     if ( verticles == nullptr || vertexCount == 0 || indices == nullptr || indexCount == 0 )
         return;
+    if ( m_pVertexBuffer == nullptr || m_pIndexBuffer == nullptr )
+    {
+        g_pDebug->printError( "Water geometry dropped: the pipeline upload buffers were not created." );
+        return;
+    }
+    // The buffers are mapped as one contiguous range of their creation size, so geometry that does not fit
+    // would be copied past the end of the mapped region. The limit is compared as a count rather than as a
+    // byte size so the comparison cannot wrap for any count the unsigned parameters can hold.
+    if ( vertexCount > kWaterVertexBufferBytes / sizeof( RwIm3DVertex ) ||
+         indexCount > kWaterIndexBufferBytes / sizeof( RwImVertexIndex ) )
+    {
+        g_pDebug->printError( "Water geometry dropped: it does not fit the pipeline fixed upload buffers." );
+        return;
+    }
     m_pWaterRaster = ( *(RwRaster**)0xC228A8 );
     m_pWaterWakeRaster = ( *(RwRaster**)0xC228B8 );
     g_pRenderBuffersMgr->UpdateWorldMatrix( nullptr );
@@ -81,7 +108,16 @@ void CCustomWaterPipeline::RenderWater( RwIm3DVertex * verticles, UINT vertexCou
         D3D11_MAPPED_SUBRESOURCE mappedResource;
         ZeroMemory( &mappedResource, sizeof( D3D11_MAPPED_SUBRESOURCE ) );
         //	Disable GPU access to the vertex buffer data.
-        devContext->Map( m_pVertexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource );
+        const HRESULT vertexMapResult = devContext->Map( m_pVertexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource );
+        if ( FAILED( vertexMapResult ) || mappedResource.pData == nullptr )
+        {
+            // A map that succeeded but produced no pointer still holds the buffer, and the next frame
+            // cannot map it again until it is released.
+            if ( SUCCEEDED( vertexMapResult ) )
+                devContext->Unmap( m_pVertexBuffer, 0 );
+            g_pDebug->printError( "Water geometry dropped: the vertex buffer could not be mapped." );
+            return;
+        }
         //	Update the vertex buffer here.
         memcpy( mappedResource.pData, verticles, sizeof( RwIm3DVertex )*vertexCount );
         //	Reenable GPU access to the vertex buffer data.
@@ -89,7 +125,14 @@ void CCustomWaterPipeline::RenderWater( RwIm3DVertex * verticles, UINT vertexCou
 
         ZeroMemory( &mappedResource, sizeof( D3D11_MAPPED_SUBRESOURCE ) );
         //	Disable GPU access to the index buffer data.
-        devContext->Map( m_pIndexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource );
+        const HRESULT indexMapResult = devContext->Map( m_pIndexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource );
+        if ( FAILED( indexMapResult ) || mappedResource.pData == nullptr )
+        {
+            if ( SUCCEEDED( indexMapResult ) )
+                devContext->Unmap( m_pIndexBuffer, 0 );
+            g_pDebug->printError( "Water geometry dropped: the index buffer could not be mapped." );
+            return;
+        }
         //	Update the index buffer here.
         memcpy( mappedResource.pData, &indices[0], sizeof( RwImVertexIndex )*indexCount );
         //	Reenable GPU access to the index buffer data.

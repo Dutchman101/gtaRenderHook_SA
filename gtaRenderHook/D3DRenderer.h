@@ -91,13 +91,20 @@ public:
      */
     DXGI_MODE_DESC			getAdapterModeDesc( UINT n )
     {
+        if ( m_vAdapterModes.empty() ) return DXGI_MODE_DESC{};
         if ( n < getAdapterModeCount() ) return m_vAdapterModes[n];
         else	return m_vAdapterModes[0];
     }
     /*!
        Returns selected adapter mode description.
      */
-    DXGI_MODE_DESC			getCurrentAdapterModeDesc() { return m_vAdapterModes[m_uiCurrentAdapterMode]; }
+    DXGI_MODE_DESC			getCurrentAdapterModeDesc()
+    {
+        // The mode list stays empty when adapter or output enumeration failed, and the render path
+        // reads this every frame, so an unpopulated list has to yield a defined description.
+        if ( m_uiCurrentAdapterMode >= m_vAdapterModes.size() ) return DXGI_MODE_DESC{};
+        return m_vAdapterModes[m_uiCurrentAdapterMode];
+    }
     /*!
        Returns selected adapter name.
      */
@@ -147,6 +154,7 @@ private:
         m_uiCurrentAdapterMode = 0;
     std::vector <IDXGIAdapter*>	m_vAdapters{};
     std::vector <DXGI_MODE_DESC>	m_vAdapterModes{};
+    char					m_sAdapterInfo[80]{};
 };
 
 #endif // D3DRenderer_h__

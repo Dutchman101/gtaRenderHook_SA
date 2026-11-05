@@ -33,14 +33,46 @@ CD3D1XBuffer::~CD3D1XBuffer()
 
 void CD3D1XBuffer::Update( void * data, int size )
 {
+    if ( data == nullptr )
+        return;
+
+    // The requested size comes from callers and can exceed the allocation; clamp it so the
+    // copy can never run past the mapped region.
+    const unsigned int requestedSize = size < 0 ? m_uiSize : static_cast<unsigned int>( size );
+    const unsigned int copySize = requestedSize > m_uiSize ? m_uiSize : requestedSize;
+    if ( copySize == 0 )
+        return;
+
     auto context = GET_D3D_CONTEXT;
-    D3D11_MAPPED_SUBRESOURCE mappedResource;
-    context->Map( m_pBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource );
-    memcpy( mappedResource.pData, data, size < 0 ? m_uiSize : size );
+    D3D11_MAPPED_SUBRESOURCE mappedResource{};
+    const HRESULT mapResult = context->Map( m_pBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource );
+    if ( FAILED( mapResult ) || mappedResource.pData == nullptr )
+    {
+        // A map that succeeded but produced no pointer still holds the buffer, and the next write
+        // cannot map it again until it is released.
+        if ( SUCCEEDED( mapResult ) )
+            context->Unmap( m_pBuffer, 0 );
+        return;
+    }
+
+    memcpy( mappedResource.pData, data, copySize );
     context->Unmap( m_pBuffer, 0 );
 }
 
 void CD3D1XBuffer::SetDebugName( const std::string &name )
 {
-    g_pDebug->SetD3DName( m_pBuffer, name + "(D3D1XBuffer)" );
+    // The name is only a label for the graphics debugger, so nothing that draws depends on it, but
+    // building the suffixed string allocates. Holding the failure here keeps a missed label from
+    // leaving as an exception out of the caller, which is why this never reports back. Nothing is
+    // logged from the handler either: logging builds a string too, and that would throw again on
+    // the path that has just failed to allocate. A name short enough to fit the string's inline
+    // buffer, as every batch pipeline name is, costs the caller no allocation either.
+    try
+    {
+        m_sDebugName = name;
+        g_pDebug->SetD3DName( m_pBuffer, name + "(D3D1XBuffer)" );
+    }
+    catch ( ... )
+    {
+    }
 }

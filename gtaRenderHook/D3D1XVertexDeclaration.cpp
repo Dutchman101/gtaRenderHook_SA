@@ -43,7 +43,16 @@ CD3D1XVertexDeclaration::CD3D1XVertexDeclaration( CD3D1XShader* pVS, UINT flags 
         m_stride += 12;
     }
     m_inputInfo = flags;
-    CALL_D3D_API( GET_D3D_DEVICE->CreateInputLayout( m_elements.data(), m_elements.size(), m_pShader->getBlob()->GetBufferPointer(), m_pShader->getBlob()->GetBufferSize(), &m_inputLayout ),
+    // A shader whose compilation or creation failed now finishes its constructor with no blob
+    // instead of unwinding the process, so the blob is checked here rather than assumed. The
+    // declaration stays usable with no input layout, which binds as a null layout.
+    ID3DBlob* blob = m_pShader != nullptr ? m_pShader->getBlob() : nullptr;
+    if ( blob == nullptr )
+    {
+        g_pDebug->printError( "Input layout skipped: the vertex shader has no compiled blob." );
+        return;
+    }
+    CALL_D3D_API( GET_D3D_DEVICE->CreateInputLayout( m_elements.data(), m_elements.size(), blob->GetBufferPointer(), blob->GetBufferSize(), &m_inputLayout ),
                   "Failed to create Input Layout" );
 }
 
@@ -52,7 +61,14 @@ CD3D1XVertexDeclaration::CD3D1XVertexDeclaration( const std::vector<D3D11_INPUT_
     m_pShader = pVS;
     m_stride = stride;
     m_inputInfo = 0;
-    auto blob = m_pShader->getBlob();
+    auto blob = m_pShader != nullptr ? m_pShader->getBlob() : nullptr;
+    // Same reason as the flags constructor: a failed shader compile leaves the blob null, and this
+    // layout is built from that shader's bytecode.
+    if ( blob == nullptr )
+    {
+        g_pDebug->printError( "Input layout skipped: the vertex shader has no compiled blob." );
+        return;
+    }
     CALL_D3D_API( GET_D3D_DEVICE->CreateInputLayout( m_elements.data(), m_elements.size(), blob->GetBufferPointer(), blob->GetBufferSize(), &m_inputLayout ),
                   "Failed to create input layout for vertex shader" );
 }

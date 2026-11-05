@@ -32,7 +32,7 @@ public:
     */
     RwBool SubmitNode();
 private:
-    void EnsureCapacity( unsigned int vertexCount, unsigned int indexCount );
+    bool EnsureCapacity( unsigned int vertexCount, unsigned int indexCount );
     CD3D1XVertexDeclaration*	m_pVertexDeclaration = nullptr;
     CD3D1XDynamicVertexBuffer*	m_pVertexBuffer = nullptr;
     CD3D1XDynamicIndexBuffer*	m_pIndexBuffer = nullptr;

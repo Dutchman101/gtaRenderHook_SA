@@ -55,14 +55,35 @@ bool CRwD3D1XEngine::Open( HWND window )
 
 bool CRwD3D1XEngine::Close()
 {
+    // Open assigns this pointer and Close is its matching teardown, so it is cleared here: a second
+    // Close, or a Stop that arrives after it, would otherwise reach an object that no longer exists.
     delete m_pRenderer;
+    m_pRenderer = nullptr;
     return true;
 }
 
 // Initializes device, all managers and rendering pipelines.
 bool CRwD3D1XEngine::Start()
 {
-    m_pRenderer->InitDevice();
+    // Every pipeline and manager below creates Direct3D 11 objects, so a device that failed to come
+    // up has to stop the startup here instead of letting each constructor run against a null device.
+    // The report goes through printError rather than printMsg because DebugMessaging defaults to off,
+    // and a startup that stops has to leave a record even then.
+    // The renderer is opened by the game and closed before the next open, so it can be absent here.
+    if ( m_pRenderer == nullptr )
+    {
+        g_pDebug->printError( "RenderHook startup aborted: no renderer is open, so the device was not initialized." );
+        return false;
+    }
+    if ( !m_pRenderer->InitDevice() )
+    {
+        // InitDevice names the reason it returned false, and one of those reasons is an adapter or
+        // display mode list that enumerated nothing, where no device creation was attempted at all.
+        // This line therefore reports only what it can establish here: startup stopped before the
+        // rendering pipelines were created.
+        g_pDebug->printError( "RenderHook startup aborted: the device was not initialized, so the render pipelines were not created." );
+        return false;
+    }
     g_pGlobalShaderDefines = new CD3D1XShaderDefineList();
     const auto featureLevel = GET_D3D_FEATURE_LVL;
     auto featureLvl = to_string( featureLevel );
@@ -92,16 +113,31 @@ bool CRwD3D1XEngine::Stop()
 #ifdef USE_ANTTWEAKBAR
     TwTerminate();
 #endif
+    // Each pointer is cleared immediately after it is released. Start() can now return early without
+    // reassigning them, so a released object left reachable here would be freed a second time by the
+    // next Stop(), and a repeated Stop() has to stay safe.
     delete m_pSkinPipe;
+    m_pSkinPipe = nullptr;
     delete m_pDefaultPipe;
+    m_pDefaultPipe = nullptr;
     delete m_pIm2DPipe;
+    m_pIm2DPipe = nullptr;
     delete m_pIm3DPipe;
+    m_pIm3DPipe = nullptr;
     delete g_pRenderBuffersMgr;
+    g_pRenderBuffersMgr = nullptr;
     delete g_pStateMgr;
+    g_pStateMgr = nullptr;
+    // The define list is created by Start(), so it is released here as well or every Start/Stop cycle
+    // leaks it. It goes after the pipelines because shader compiles read it while they exist.
+    delete g_pGlobalShaderDefines;
+    g_pGlobalShaderDefines = nullptr;
     CD3D1XVertexBufferManager::Shutdown();
     CD3D1XVertexDeclarationManager::Shutdown();
     CD3D1XTextureMemoryManager::Shutdown();
-    m_pRenderer->DeInitDevice();
+    // Close can run before Stop, so the renderer may already be absent.
+    if ( m_pRenderer )
+        m_pRenderer->DeInitDevice();
     return true;
 }
 
@@ -139,7 +175,7 @@ bool CRwD3D1XEngine::GetMode( int& n )
 
 bool CRwD3D1XEngine::Focus( bool )
 {
-    g_pDebug->printError( "The method or operation is not implemented." );
+    g_pDebug->printError( "RW Focus is not implemented; the call is accepted." );
     return true;
 }
 
@@ -256,14 +292,14 @@ bool CRwD3D1XEngine::GetMaxTextureSize( int& texSize )
 int  CRwD3D1XEngine::GetMaxMultiSamplingLevels()
 {
     // currently no multisampling, will be added later 
-    g_pDebug->printError( "The method or operation is not implemented." );
+    g_pDebug->printError( "RW GetMaxMultiSamplingLevels is not implemented; returning 0." );
     return 0;
 }
 
 void CRwD3D1XEngine::SetMultiSamplingLevels( int )
 {
     // currently no multisampling, will be added later
-    g_pDebug->printError( "The method or operation is not implemented." );
+    g_pDebug->printError( "RW SetMultiSamplingLevels is not implemented; the call is ignored." );
 }
 
 bool CRwD3D1XEngine::BaseEventHandler( int State, int* a2, void* a3, int a4 )
@@ -450,6 +486,10 @@ bool CRwD3D1XEngine::Im2DRenderPrimitive( RwPrimitiveType primType, RwIm2DVertex
 
 bool CRwD3D1XEngine::Im2DRenderIndexedPrimitive( RwPrimitiveType primType, RwIm2DVertex *vertices, RwUInt32 numVertices, RwImVertexIndex *indices, RwInt32 numIndices )
 {
+    // The count is signed here and unsigned in the pipeline, so a negative count would become a
+    // buffer size request of several billion indices.
+    if ( numIndices < 0 )
+        return false;
     m_pIm2DPipe->DrawIndexed( primType, vertices, numVertices, indices, numIndices );
     return true;
 }
@@ -573,7 +613,12 @@ bool CRwD3D1XEngine::NativeTextureRead( RwStream *stream, RwTexture** tex )
                     return false;
             }
             else
-                g_pDebug->printError( "Cubemap textures is unsupported in this version of RenderHook" );
+            {
+                // Raster stays null on this branch, so the operation has to stop here: the format
+                // save below reads it.
+                g_pDebug->printError( "Cubemap textures is unsupported in this version of RenderHook; the texture read is refused." );
+                return false;
+            }
         }
 
         // TODO: Add support for palette formats in GTA SA
@@ -664,7 +709,7 @@ bool CRwD3D1XEngine::NativeTextureRead( RwStream *stream, RwTexture** tex )
         // 
         if ( rasterInfo.rasterFormat & rwRASTERFORMATPAL4 )
         {
-            g_pDebug->printError( "The method or operation is not implemented." );
+            g_pDebug->printError( "RW PAL4 raster conversion is not implemented; the raster is left unconverted." );
         }
         else if ( rasterInfo.rasterFormat & rwRASTERFORMATPAL8 )
         {

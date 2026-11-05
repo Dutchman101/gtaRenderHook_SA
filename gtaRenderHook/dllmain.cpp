@@ -70,8 +70,12 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
-        delete g_pDebug;
+        // The engine holds the debug sink it was constructed with, so it has to be destroyed
+        // while that sink is still alive.
         delete g_pRwCustomEngine;
+        g_pRwCustomEngine = nullptr;
+        delete g_pDebug;
+        g_pDebug = nullptr;
         break;
     }
     return TRUE;

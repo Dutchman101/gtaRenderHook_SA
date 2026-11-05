@@ -1,6 +1,7 @@
 // This is an open source non-commercial project. Dear PVS-Studio, please check it.
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "stdafx.h"
+#include <cmath>
 #include "RwVectorMath.h"
 
 using namespace RW;
@@ -93,12 +94,15 @@ float V3d::length()
 void V3d::normalize()
 {
     float len = length();
-    if ( len > 0 )
-    {
-        x_ /= len;
-        y_ /= len;
-        z_ /= len;
-    }
+    // A zero-length vector has no direction, and a length that is not finite comes from squaring a component
+    // large enough to overflow the sum. Dividing by either one yields a zero vector instead of a direction, so
+    // both cases are left alone. V4d::normalize and rwV3D_Normalize reject the same two cases, and the three
+    // are meant to agree.
+    if ( !std::isfinite( len ) || len <= 0.0f )
+        return;
+    x_ /= len;
+    y_ /= len;
+    z_ /= len;
 }
 
 
@@ -144,13 +148,13 @@ V4d::V4d( const float& x, const float& y, const float& z, const float& w )
 }
 
 
-V4d V4d::operator+( const V4d & b )
+V4d V4d::operator+( const V4d & b ) const
 {
     return V4d( x_ + b.x_, y_ + b.y_, z_ + b.z_, w_ + b.w_ );
 }
 
 
-V4d V4d::operator-( const V4d & b )
+V4d V4d::operator-( const V4d & b ) const
 {
     return V4d( x_ - b.x_, y_ - b.y_, z_ - b.z_, w_ - b.w_ );
 }
@@ -160,13 +164,13 @@ V4d V4d::operator-() const
     return V4d( -x_, -y_, -z_, -w_ );
 }
 
-V4d V4d::operator*( const float & b )
+V4d V4d::operator*( const float & b ) const
 {
     return V4d( x_ * b, y_ * b, z_ * b, w_ * b );
 }
 
 
-V4d V4d::operator/( const float & b )
+V4d V4d::operator/( const float & b ) const
 {
     return V4d( x_ / b, y_ / b, z_ / b, w_ / b );
 }
@@ -208,6 +212,11 @@ float V4d::length()
 void V4d::normalize()
 {
     float len = length();
+    // A zero-length vector has no direction; leaving it untouched keeps the result defined
+    // instead of dividing every component by zero. The check is wider than the one in
+    // V3d::normalize so that a non-finite length is left alone as well rather than used as a divisor.
+    if ( !std::isfinite( len ) || len <= 0.0f )
+        return;
     x_ /= len;	y_ /= len;	z_ /= len; w_ /= len;
 }
 
@@ -261,20 +270,35 @@ Matrix Matrix::operator*( const Matrix & mat )
 Matrix Matrix::inverse()
 {
     float det = right_.dot( up_.cross( at_ ) );
+    // A degenerate basis has no inverse. Returning identity keeps every downstream transform
+    // finite instead of spreading NaN or infinity through the light matrices, which is why the
+    // check rejects a non-finite determinant as well as a near-zero one.
+    if ( !std::isfinite( det ) || fabsf( det ) <= 1e-8f )
+        return { V4d{ 1.0f, 0.0f, 0.0f, 0.0f }, V4d{ 0.0f, 1.0f, 0.0f, 0.0f },
+                 V4d{ 0.0f, 0.0f, 1.0f, 0.0f }, V4d{ 0.0f, 0.0f, 0.0f, 1.0f } };
 
-    return {
-            V4d( up_.getY()*at_.getZ() - up_.getZ()*at_.getY(),
-                right_.getZ()*at_.getY() - right_.getY()*at_.getZ(),
-                right_.getY()*up_.getZ() - right_.getZ()*up_.getY(),0.0 ) / det,
+    const V4d invRow0( up_.getY()*at_.getZ() - up_.getZ()*at_.getY(),
+                       right_.getZ()*at_.getY() - right_.getY()*at_.getZ(),
+                       right_.getY()*up_.getZ() - right_.getZ()*up_.getY(), 0.0f );
+    const V4d invRow1( up_.getZ()*at_.getX() - up_.getX()*at_.getZ(),
+                       right_.getX()*at_.getZ() - right_.getZ()*at_.getX(),
+                       right_.getZ()*up_.getX() - right_.getX()*up_.getZ(), 0.0f );
+    const V4d invRow2( up_.getX()*at_.getY() - up_.getY()*at_.getX(),
+                       right_.getY()*at_.getX() - right_.getX()*at_.getY(),
+                       right_.getX()*up_.getY() - right_.getY()*up_.getX(), 0.0f );
 
-            V4d( up_.getZ()*at_.getX() - up_.getX()*at_.getZ(),
-                right_.getX()*at_.getZ() - right_.getZ()*at_.getX(),
-                right_.getZ()*up_.getX() - right_.getX()*up_.getZ(),0.0 ) / det,
+    const V4d row0 = invRow0 / det;
+    const V4d row1 = invRow1 / det;
+    const V4d row2 = invRow2 / det;
 
-            V4d( up_.getX()*at_.getY() - up_.getY()*at_.getX(),
-                right_.getY()*at_.getX() - right_.getX()*at_.getY(),
-                right_.getX()*up_.getY() - right_.getY()*up_.getX(),0.0 ) / det, {}
-    };
+    // The inverse of an affine transform needs its translation row, otherwise every
+    // inverted matrix loses its position and its last column becomes singular (w = 0).
+    const V4d invPos( -( pos_.getX()*row0.getX() + pos_.getY()*row1.getX() + pos_.getZ()*row2.getX() ),
+                      -( pos_.getX()*row0.getY() + pos_.getY()*row1.getY() + pos_.getZ()*row2.getY() ),
+                      -( pos_.getX()*row0.getZ() + pos_.getY()*row1.getZ() + pos_.getZ()*row2.getZ() ),
+                      1.0f );
+
+    return { row0, row1, row2, invPos };
 }
 
 RwMatrix RW::Matrix::getRWMatrix()

@@ -214,6 +214,11 @@ void CDeferredRenderer::RenderOutput()
     g_pRwCustomEngine->RenderStateSet( rwRENDERSTATEDESTBLEND,
                                        rwBLENDINVSRCALPHA );
 
+    // The sun and point light passes are the only ones that sample the cascade atlas, so the border sampler
+    // mode and slot 4 are released here rather than at the end of the function: FinalPassPS binds its own
+    // lighting raster to slot 4 below.
+    m_pShadowRenderer->UnsetShadowBuffer();
+
     // Render reflection pass
     g_pRwCustomEngine->SetRenderTargets( &m_pReflectionRaster, nullptr, 1 );
     g_pStateMgr->FlushRenderTargets();

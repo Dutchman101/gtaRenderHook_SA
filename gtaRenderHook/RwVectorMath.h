@@ -57,11 +57,11 @@ namespace RW
         V4d( const RwV4d& vec );
         V4d( const V3d& vec, const float& w = 0 );
         V4d( const float& x, const float& y, const float& z, const float& w );
-        V4d operator+( const V4d& b );
-        V4d operator-( const V4d& b );
+        V4d operator+( const V4d& b ) const;
+        V4d operator-( const V4d& b ) const;
         V4d operator-() const;
-        V4d operator*( const float& b );
-        V4d operator/( const float& b );
+        V4d operator*( const float& b ) const;
+        V4d operator/( const float& b ) const;
         V4d cross( const V4d& b );
         float dot( const V4d& b );
         V4d operator*( const Matrix& mat );

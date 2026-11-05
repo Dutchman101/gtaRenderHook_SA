@@ -14,6 +14,11 @@ const D3D11_PRIMITIVE_TOPOLOGY CD3D1XEnumParser::m_primConvertTable[]{
 };
 D3D11_PRIMITIVE_TOPOLOGY CD3D1XEnumParser::ConvertPrimTopology( RwPrimitiveType prim )
 {
+    // The primitive type arrives from callers outside this module, so it is checked before it
+    // indexes the table. An out-of-range value leaves the draw with no topology rather than
+    // reading past the table.
+    if ( prim < 0 || static_cast<size_t>( prim ) >= ARRAYSIZE( m_primConvertTable ) )
+        return D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
     return m_primConvertTable[prim];
 }
 
@@ -163,6 +168,8 @@ DXGI_FORMAT CD3D1XEnumParser::ConvertToSRVSupportedFormat( DXGI_FORMAT fmt )
         return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
     case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
         return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+    case DXGI_FORMAT_D16_UNORM:
+        return DXGI_FORMAT_R16_UNORM;
     default:
         return fmt;
     }
@@ -170,7 +177,6 @@ DXGI_FORMAT CD3D1XEnumParser::ConvertToSRVSupportedFormat( DXGI_FORMAT fmt )
 
 DXGI_FORMAT CD3D1XEnumParser::ConvertToTextureBufferSupportedFormat( DXGI_FORMAT fmt )
 {
-    // TODO: add 16bit format support
     switch ( fmt )
     {
     case DXGI_FORMAT_D32_FLOAT:
@@ -179,6 +185,8 @@ DXGI_FORMAT CD3D1XEnumParser::ConvertToTextureBufferSupportedFormat( DXGI_FORMAT
         return DXGI_FORMAT_R24G8_TYPELESS;
     case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
         return DXGI_FORMAT_R32G8X24_TYPELESS;
+    case DXGI_FORMAT_D16_UNORM:
+        return DXGI_FORMAT_R16_TYPELESS;
     default:
         return fmt;
     }

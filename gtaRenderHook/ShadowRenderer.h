@@ -3,9 +3,15 @@
 #include "SettingsHolder.h"
 #include "AntTweakBar.h"
 #include "D3D1XConstantBuffer.h"
+
+// One bound shared by the cascade arrays and by every writer of ShadowCascadeCount. The settings
+// file, the tweak bar and Reset all assign that count, so a bound applied at only some of them
+// lets the others index past the arrays below.
+constexpr int kMaxShadowCascades = 4;
+
 struct CBShadows
 {
-    RwMatrix ViewProj[4];
+    RwMatrix ViewProj[kMaxShadowCascades];
     float	FadeDistances[5];
     int		ShadowSize;
     int		CascadeCount;
@@ -29,7 +35,17 @@ public:
     RW::V3d CalculateCameraPos( RwCamera* mainCam, const RW::V3d & lightDir, int shadowCascade );
     void CalculateFrustumPoints( RwReal fNear, RwReal fFar, RwCamera* camera, RW::V3d* points );
     void RenderShadowToBuffer( int cascade, void( *render )( int cascade ) );
+    /*!
+        Binds the shadow cbuffer, switches the sampler to border addressing and puts the cascade zBuffer on
+        PS SRV slot 4. Every caller has to pair it with UnsetShadowBuffer(): the slot and the sampler mode
+        are shared with the deferred G-buffer and post-processing passes, and a pass that inherits either
+        one reads the shadow atlas or clamps its own UVs at the border instead of wrapping them.
+    */
     void SetShadowBuffer() const;
+    /*!
+        Reverses SetShadowBuffer(): restores the sampler address modes it captured and releases PS SRV slot 4.
+    */
+    void UnsetShadowBuffer() const;
     void CalculateShadowDistances( RwReal fNear, RwReal fFar );
     void QueueTextureReload();
     void DrawDebug();
@@ -41,7 +57,7 @@ public:
     bool IsCascadeUpdated( int cascade ) const { return m_bCascadeUpdated[cascade]; }
     bool AllCascadesUpdated() const;
     RwCamera* m_pShadowCamera = nullptr;
-    float     m_fShadowDistances[5]{};
+    float     m_fShadowDistances[kMaxShadowCascades + 1]{};
     bool	m_bShadowsRendered = false;
     // shadows were rendered last frame, so cascades kept from it are still valid
     bool	m_bShadowHistoryValid = false;
@@ -49,14 +65,14 @@ public:
     /*!
         Light aligned bounding box for each shadow cascade
     */
-    static RW::BBox m_LightBBox[4];
-    static RwV3d m_LightPos[4];
-    static RW::Matrix m_LightSpaceMatrix[4];
-    static RW::Matrix m_InvLightSpaceMatrix[4];
-    static RW::V3d m_vFrustumCorners[4][8];
+    static RW::BBox m_LightBBox[kMaxShadowCascades];
+    static RwV3d m_LightPos[kMaxShadowCascades];
+    static RW::Matrix m_LightSpaceMatrix[kMaxShadowCascades];
+    static RW::Matrix m_InvLightSpaceMatrix[kMaxShadowCascades];
+    static RW::V3d m_vFrustumCorners[kMaxShadowCascades][8];
 private:
     void ClearCascade( int cascade );
-    bool    m_bCascadeUpdated[4]{ true, true, true, true };
+    bool    m_bCascadeUpdated[kMaxShadowCascades]{ true, true, true, true };
     bool    m_bForceFullUpdate = true;
     UINT    m_uiFrame = 0;
     RW::V3d m_vLastLightDir{ 0, 0, 0 };
@@ -65,6 +81,13 @@ private:
     class CD3D1XShader* m_pDepthClearPS = nullptr;
     RwMatrix* m_pLightViewProj;
     CD3D1XConstantBuffer<CBShadows>* m_pLightCB;
+    // Sampler address modes in force before SetShadowBuffer overrode them, kept so UnsetShadowBuffer can put
+    // back exactly what the surrounding pass expects rather than a guess. Mutable because both the bind and
+    // the unbind are logically const: they change render state, not the shadow renderer. Seeded with the mode
+    // the state manager actually starts on, so an unbind that ran before any bind would still restore it.
+    mutable RwTextureAddressMode m_eSavedAddressU = rwTEXTUREADDRESSWRAP;
+    mutable RwTextureAddressMode m_eSavedAddressV = rwTEXTUREADDRESSWRAP;
+    mutable RwTextureAddressMode m_eSavedAddressW = rwTEXTUREADDRESSWRAP;
 };
 
 class ShadowSettingsBlock : public SettingsBlock

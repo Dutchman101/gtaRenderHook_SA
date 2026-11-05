@@ -30,7 +30,7 @@ public:
     void DrawIndexed( RwPrimitiveType prim, RwIm2DVertex *vertices, RwUInt32 numVertices, RwImVertexIndex *indices, RwUInt32 numIndices );
 
 private:
-    void EnsureCapacity( unsigned int vertexCount, unsigned int indexCount );
+    bool EnsureCapacity( unsigned int vertexCount, unsigned int indexCount );
     CD3D1XVertexDeclaration*	m_pVertexDecl = nullptr;
     CD3D1XDynamicVertexBuffer*	m_pVertexBuffer = nullptr;
     CD3D1XDynamicIndexBuffer*	m_pIndexBuffer = nullptr;

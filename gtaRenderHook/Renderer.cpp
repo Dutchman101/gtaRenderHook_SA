@@ -24,6 +24,18 @@
 #include "DebugBBox.h"
 #include <algorithm>
 #include <unordered_set>
+// GetSector clamps a sector index into the game's 120x120 sector grid, so this count is both the
+// grid extent and the range the index has to stay inside. The 60 and 50 literals that place a
+// sector in world space are this grid's half extent and its cell size, so they have to stay in
+// step with this count.
+constexpr int kSectorGridSize = 120;
+
+// These live in Renderer.h, which cannot see the cascade bound, so the two are pinned together
+// here: a mismatch indexes past the arrays once the cascade count reaches the bound.
+static_assert( ARRAYSIZE( CRendererRH::ms_aShadowCasterBoundingPlanes ) == kMaxShadowCascades,
+               "cascade plane array must match the cascade bound" );
+static_assert( ARRAYSIZE( CRendererRH::ms_aVisibleShadowCasters ) == kMaxShadowCascades,
+               "per-cascade caster list array must match the cascade bound" );
 bool		&CRendererRH::ms_bRenderTunnels = *(bool*)0xB745C0;
 bool		&CRendererRH::ms_bRenderOutsideTunnels = *(bool*)0xB745C1;
 bool&		CRendererRH::ms_bInTheSky = *(bool*)0xB76851;
@@ -774,10 +786,11 @@ void CRendererRH::ScanSectorList( int x, int y )
     //return;
 
     bool loadIfRequired = false;
-    bool dontRenderSectorEntities = false;
-    // If sector id is wrong than quit scanning.
-    if ( x < 0 || y < 0 || x >= 120 || y >= 120 )
-        dontRenderSectorEntities = true;
+    // GetSector clamps the index into the grid and GetRepeatSector wraps it, so neither can read
+    // past its table. An index outside the grid still names a sector, just not its own, so the
+    // walk is limited to in-grid indices.
+    if ( x < 0 || y < 0 || x >= kSectorGridSize || y >= kSectorGridSize )
+        return;
     CSector*	  sector = GetSector( x, y );
     CRepeatSector* repeatSector = GetRepeatSector( x, y );
     // Calculate sector world space position, there are 120 sectors with size of 50 units 
@@ -794,15 +807,13 @@ void CRendererRH::ScanSectorList( int x, int y )
         loadIfRequired = true;
     }
 
-    if ( !dontRenderSectorEntities )
-        ScanPtrList( &sector->m_buildings, loadIfRequired );
+    ScanPtrList( &sector->m_buildings, loadIfRequired );
 
     ScanPtrList( &repeatSector->m_lists[REPEATSECTOR_OBJECTS], loadIfRequired );
     ScanPtrList( &repeatSector->m_lists[REPEATSECTOR_VEHICLES], loadIfRequired );
     ScanPtrList( &repeatSector->m_lists[REPEATSECTOR_PEDS], loadIfRequired );
 
-    if ( !dontRenderSectorEntities )
-        ScanPtrList( &sector->m_dummies, loadIfRequired );
+    ScanPtrList( &sector->m_dummies, loadIfRequired );
 
 }
 
@@ -1132,7 +1143,12 @@ void CRendererRH::ScanBigBuildingsForShadowCasters()
 
 void CRendererRH::ScanSectorListForReflections( int x, int y )
 {
-    CSector*	  sector = GetSector( x, y );
+    // Same rule as ScanSectorList: an index outside the grid still names a sector, just not its
+    // own, so only in-grid indices are walked.
+    if ( x < 0 || y < 0 || x >= kSectorGridSize || y >= kSectorGridSize )
+        return;
+
+    CSector*      sector = GetSector( x, y );
     CRepeatSector* repeatSector = GetRepeatSector( x, y );
 
     ScanPtrListForReflections( &sector->m_buildings, false );
@@ -1141,30 +1157,13 @@ void CRendererRH::ScanSectorListForReflections( int x, int y )
 
 void CRendererRH::ScanSectorListForShadowCasters( int x, int y )
 {
-    bool dontRenderSectorEntities = false;
-    // If sector id is wrong than quit scanning.
-    if ( x < 0 || y < 0 || x >= 120 || y >= 120 )
-        dontRenderSectorEntities = true;
-    float sectorPosX = ( x - 60 ) * 50.0f + 25.0f;
-    float sectorPosY = ( y - 60 ) * 50.0f + 25.0f;
-
-    // Calculate distance to camera
-    float camDistX = sectorPosX - ms_vecCameraPosition.x;
-    float camDistY = sectorPosY - ms_vecCameraPosition.y;
-    float distanceToSector = sqrt( camDistY * camDistY + camDistX * camDistX );
-    //	RW::BBox	 sectorBBox = { { sectorPosX + 25.0 , sectorPosY + 25.0,3000 },{ sectorPosX - 25.0 , sectorPosY - 25.0,-3000 } };
-
-        /*if (distanceToSector >= CRenderer__ms_fFarClipPlane)
-            return;*/
+    // Same rule as ScanSectorList: an index outside the grid still names a sector, just not its
+    // own, so it is dropped before either lookup.
+    if ( x < 0 || y < 0 || x >= kSectorGridSize || y >= kSectorGridSize )
+        return;
     CSector*	  sector = GetSector( x, y );
-    CRepeatSector* repeatSector = GetRepeatSector( x, y );
     // TODO: Add sector skip to improve performance
-    if ( !dontRenderSectorEntities )
-        ScanPtrListForShadows( &sector->m_buildings, false );
-
-    //ScanPtrListForShadows(&repeatSector->m_lists[0], loadIfRequired);
-    //ScanPtrListForShadows(&repeatSector->m_lists[1], loadIfRequired);
-    //ScanPtrListForShadows(&repeatSector->m_lists[2], loadIfRequired);
+    ScanPtrListForShadows( &sector->m_buildings, false );
 
     //if (!dontRenderSectorEntities)
     //	ScanPtrListForShadows(sector->m_dummies, loadIfRequired);

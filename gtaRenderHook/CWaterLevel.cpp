@@ -74,7 +74,7 @@ void CWaterLevel::RenderWater()
     CurrentTextureShiftU += waterSpeedX / WATER_UPDATE_FRAMERATE;
     CurrentTextureShiftV += waterSpeedY / WATER_UPDATE_FRAMERATE;
     CurrentTextureShiftSecondU += waterSpeedX / ( 2 * WATER_UPDATE_FRAMERATE );
-    CurrentTextureShiftSecondU += waterSpeedY / ( 2 * WATER_UPDATE_FRAMERATE );
+    CurrentTextureShiftSecondV += waterSpeedY / ( 2 * WATER_UPDATE_FRAMERATE );
 
     if ( CurrentTextureShiftU > 1.0 )
         CurrentTextureShiftU -= 1.0;

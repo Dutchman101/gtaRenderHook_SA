@@ -436,6 +436,17 @@ void CD3D1XStateManager::SetTextureAdressV( RwTextureAddressMode mode )
     }
 }
 
+void CD3D1XStateManager::SetTextureAdressW( RwTextureAddressMode mode )
+{
+    D3D11_TEXTURE_ADDRESS_MODE d3dMode = CD3D1XEnumParser::ConvertTextureAddressMode( mode );
+
+    if ( m_sampDesc.AddressW != d3dMode )
+    {
+        m_sampDesc.AddressW = d3dMode;
+        m_bSampDescReqUpdate = true;
+    }
+}
+
 void CD3D1XStateManager::SetTextureFilterMode( RwTextureFilterMode mode )
 {
     D3D11_FILTER d3dMode = CD3D1XEnumParser::ConvertTextureFilterMode( mode );

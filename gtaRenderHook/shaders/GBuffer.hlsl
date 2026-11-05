@@ -193,7 +193,7 @@ void GetAvgDepth(Texture2D TexBuffer, SamplerState Sampler, float2 TexCoords, ou
     ViewDepth = DecodeFloatRG(NormalSpec.zw);
     ViewDepth = ViewDepth <= 0 ? fFarClip : ViewDepth;
     AvgDepth = ViewDepth;
-    for (int k; k < 8; k++)
+    for (int k = 0; k < 8; k++)
     {
         float4 NormalSpec = TexBuffer.SampleLevel(Sampler, TexCoords + NeighborPattern[k] * Offset, 0);
 
@@ -218,7 +218,7 @@ void GetNeighborDepthDiff(Texture2D TexBuffer, SamplerState Sampler, float2 TexC
     ViewDepth = ViewDepth <= 0 ? fFarClip : ViewDepth;
     MinDepth = ViewDepth;
     MaxDepth = ViewDepth;
-    for (int k; k < 8; k++)
+    for (int k = 0; k < 8; k++)
     {
         float4 NormalSpec = TexBuffer.SampleLevel(Sampler, TexCoords + NeighborPattern[k] * Offset, 0);
 

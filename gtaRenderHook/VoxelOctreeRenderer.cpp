@@ -39,11 +39,13 @@ void CVoxelOctreeRenderer::Init()
     RwCameraSetRaster( m_pVoxelCamera, voxelClipMap[0] );
     RwCameraSetZRaster( m_pVoxelCamera, RwRasterCreate( voxelTreeSize, voxelTreeSize, 32, rwRASTERTYPEZBUFFER ) );
 
+    // The constant buffer has to exist before anything writes through it; SetVoxelLODSize
+    // updates it directly.
+    m_pVoxelCB = new CD3D1XConstantBuffer<CBVoxel>();
     SetVoxelLODSize( 1 );
     //CameraSize(m_pShadowCamera, 0, tan(3.14f / 2), 1.0f);
     RwObjectHasFrameSetFrame( m_pVoxelCamera, RwFrameCreate() );
     RpWorldAddCamera( Scene.m_pRpWorld, m_pVoxelCamera );
-    m_pVoxelCB = new CD3D1XConstantBuffer<CBVoxel>();
 }
 
 
