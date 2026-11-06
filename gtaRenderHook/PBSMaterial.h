@@ -20,9 +20,11 @@ struct CPBSMaterialNameHash
 {
     std::size_t operator()( std::string_view name ) const
     {
-        std::uint64_t hash = 14695981039346656037ull;
+        // 32-bit hahs: the hash is returned as std::size_t, which is 32 bits on the 32-bit target, so the offset
+        // basis and the prime are both 32 bits and the multiply stays inside the returned width.
+        std::uint32_t hash = 2166136261u;
         for ( char c : name )
-            hash = ( hash ^ static_cast<std::uint64_t>( static_cast<unsigned char>( FoldPBSMaterialNameChar( c ) ) ) ) * 1099511628211ull;
+            hash = ( hash ^ static_cast<unsigned char>( FoldPBSMaterialNameChar( c ) ) ) * 16777619u;
         return static_cast<std::size_t>( hash );
     }
 };

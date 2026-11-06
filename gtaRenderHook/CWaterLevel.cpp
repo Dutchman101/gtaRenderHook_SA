@@ -240,12 +240,15 @@ void CWaterLevel::RenderWaterRectangle( int x0, int x1, int y0, int y1, const CR
         maxY = y0;
     }*/
     RenderDetailedWaterRectangle_OneLayer( x0, x1, y0, y1, a, b, c, d, 0 );
-    // Every water rectangle is drawn at full detail on purpose: the distance split below feeds
-    // RenderFlatWaterRectangle_OneLayer, which only ever sets objNormal.z and never runs CalculateWavesForCoordinate, so
-    // far water would lose its wave normals and shade differently from near water. Re-enabling the split needs a flat
-    // path that produces usable normals first; until then the branch stays unreachable rather than silently returning
-    // to it. The split reads CameraRangeMinX/MinY and CameraRangeMaxX/MaxY, so the SetCameraRange call that fills them
-    // in sits below the return with its only readers, and comes back with them.
+    // Every water rectangle is drawn at full detail on purpose. The distance split below feeds
+    // RenderFlatWaterRectangle_OneLayer, which emits one quad for the whole rectangle where the detailed path
+    // tessellates it, so far water would sample the wave normal at four corners of a rectangle that can be 500 m
+    // across and shade differently from near water. The flat path does call CalculateWavesForCoordinate and does write
+    // wave normals into objNormal, and past 100 m the detailed path passes a zero height scale, which flattens its own
+    // normals to (0,0,1) as well, so the difference that keeps the split off is the sampling density, not a missing
+    // wave evaluation. Re-enabling the split needs that resolved first; until then the branch stays unreachable rather
+    // than silently returning to it. The split reads CameraRangeMinX/MinY and CameraRangeMaxX/MaxY, so the SetCameraRange
+    // call that fills them in sits below the return with its only readers, and comes back with them.
     return;
     SetCameraRange();
     if ( x0 >= CameraRangeMaxX || x1 <= CameraRangeMinX || y0 >= CameraRangeMaxY || y1 <= CameraRangeMinY )

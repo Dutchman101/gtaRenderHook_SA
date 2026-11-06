@@ -278,8 +278,6 @@ char CRendererRH::AddEntityToShadowCasterList( CEntity * entity, float renderDis
         return false;
     if ( entity->m_pRwObject == nullptr )
     {
-        if ( !CanEntityCastShadow( entity ) )
-            return false;
         entity->CreateRwObject();
         if ( entity->m_pRwObject == nullptr )
             return false;
