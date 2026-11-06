@@ -1690,12 +1690,12 @@ void CRendererRH::CalculateShadowBoundingPlanes( int shadowCascade )
     RW::BBox lightAABB = g_pDeferredRenderer->m_pShadowRenderer->m_LightBBox[shadowCascade];
     // The shadow camera's view window is set from half the crate size (ShadowRenderer.cpp), so the two side planes sit
     // half a size from the centre, not a full size. Narrowing them can only reject a caster that is entirely behind
-    // them, which the shadow map does not contain either. The Z plane is deliberately left at the full size: the
-    // shadow camera's far clip is the crate's Z size plus a margin, so that plane marks the depth range the cascade
-    // actually renders and halving it would drop casters the shadow map still covers.
+    // them, which the shadow map does not contain either. The Z plane has to reach the shadow camera's far clip, which
+    // is the crate's Z size plus kShadowFarClipMargin, or casters in that last stretch are culled while the shadow map
+    // still renders them.
     auto lightAABBX = lightAABB.getSizeX() * 0.5f;
     auto lightAABBY = lightAABB.getSizeY() * 0.5f;
-    auto lightAABBZ = lightAABB.getSizeZ();
+    auto lightAABBZ = lightAABB.getSizeZ() + kShadowFarClipMargin;
     auto rightAxis = lightSpaceFrustum.getRightv3();
     auto upAxis = lightSpaceFrustum.getUpv3();
     auto atAxis = lightSpaceFrustum.getAtv3();

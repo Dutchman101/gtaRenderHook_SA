@@ -1598,9 +1598,10 @@ void CRwD3D1XEngine::SetRenderTargets( RwRaster ** rasters, RwRaster* zBuffer, R
 
 void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** uavs, RwRaster* zBuffer, RwUInt32 rasterCount, RwUInt32 uavCount, RwUInt32 uavStart )
 {
-    // rasters is indexed below, and a zero count or a null first entry means the caller has nothing to bind.
-    if ( rasterCount == 0 || rasters == nullptr || rasters[0] == nullptr )
-        return;
+    // No colour targets at all is a valid request here: the caller still gets its depth buffer and UAVs bound, which is
+    // the reason this entry point exists next to SetRenderTargets. An absent array is therefore the same as zero.
+    if ( rasters == nullptr )
+        rasterCount = 0;
 
     ID3D11DepthStencilView* depthStencilRes = nullptr;
     if ( zBuffer )
@@ -1612,30 +1613,37 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
                 depthStencilRes = depthTarget->GetDepthStencilView();
         }
     }
-    std::vector<ID3D11RenderTargetView*> pRTVs;
+    // Slot-preserving like SetRenderTargets: an entry that resolves to nothing keeps its index, so the views after it do
+    // not slide down into lower SV_Target numbers.
+    ID3D11RenderTargetView * pRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    RwUInt32 boundCount = 0;
     std::vector<ID3D11UnorderedAccessView*> pUAVs;
-    for ( RwUInt32 i = 0; i < rasterCount; ++i )
+    for ( RwUInt32 i = 0; i < rasterCount && boundCount < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
     {
         if ( rasters[i] )
         {
             RwD3D1XRaster* pd3dRaster = GetD3D1XRaster( rasters[i] );
             auto renderTarget = dynamic_cast<ID3D1XRenderTargetViewable*>( pd3dRaster->resourse );
-            pRTVs.push_back( renderTarget ? renderTarget->GetRenderTargetView() : nullptr );
+            pRTVs[boundCount] = renderTarget ? renderTarget->GetRenderTargetView() : nullptr;
         }
+        boundCount++;
     }
-    D3D11_VIEWPORT vp;
-    vp.Width = static_cast<FLOAT>( rasters[0]->width );
-    vp.Height = static_cast<FLOAT>( rasters[0]->height );
-    vp.MaxDepth = 1;
-    vp.MinDepth = 0;
-    vp.TopLeftX = 0; vp.TopLeftY = 0;
+    if ( boundCount > 0 && rasters[0] != nullptr )
+    {
+        D3D11_VIEWPORT vp;
+        vp.Width = static_cast<FLOAT>( rasters[0]->width );
+        vp.Height = static_cast<FLOAT>( rasters[0]->height );
+        vp.MaxDepth = 1;
+        vp.MinDepth = 0;
+        vp.TopLeftX = 0; vp.TopLeftY = 0;
 
-    g_pStateMgr->SetViewport( vp );
-    if ( uavs == nullptr || uavs[0] == nullptr )
+        g_pStateMgr->SetViewport( vp );
+    }
+    if ( uavs == nullptr || uavCount == 0 || uavs[0] == nullptr )
     {
         ID3D11UnorderedAccessView* puav = nullptr;
 
-        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( pRTVs.size(), pRTVs.data(), depthStencilRes,
+        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( boundCount, pRTVs, depthStencilRes,
                                                                               uavStart, 1, &puav, nullptr );
         return;
     }
@@ -1645,13 +1653,15 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
         pUAVs.push_back(pd3dRaster->resourse->GetUAV());
     }*/
 
-    m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( pRTVs.size(), pRTVs.data(), depthStencilRes,
-                                                                          uavStart, pUAVs.size(), pUAVs.data(), nullptr );
-    if ( rasterCount > 1 )
+    m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( boundCount, pRTVs, depthStencilRes,
+                                                                          uavStart, static_cast<UINT>( pUAVs.size() ),
+                                                                          pUAVs.data(), nullptr );
+    if ( boundCount > 1 )
     {
         float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        for ( auto rtv : pRTVs )
-            m_pRenderer->getContext()->ClearRenderTargetView( rtv, clearColor );
+        for ( RwUInt32 i = 0; i < boundCount; i++ )
+            if ( pRTVs[i] != nullptr )
+                m_pRenderer->getContext()->ClearRenderTargetView( pRTVs[i], clearColor );
     }
 }
 

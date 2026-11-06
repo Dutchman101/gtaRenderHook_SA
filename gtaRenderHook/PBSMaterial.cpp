@@ -91,6 +91,10 @@ void CPBSMaterialMgr::LoadMaterials()
     auto dir_iter = std::filesystem::recursive_directory_iterator( path, ec );
     for ( auto &p : dir_iter )
     {
+        // A directory can carry the same extension as a material file, so only regular files are opened.
+        std::error_code fileEc;
+        if ( !p.is_regular_file( fileEc ) || fileEc )
+            continue;
         if ( HasSuffix( p.path().extension().string(), kMaterialExtension ) )
         {
             auto materialptr = new CPBSMaterial( p.path().string() );

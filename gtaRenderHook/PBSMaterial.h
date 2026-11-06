@@ -47,7 +47,13 @@ class CPBSMaterial
 {
 public:
     CPBSMaterial( const std::string&fname );
-  std::string m_sName{};
+    // The manager keys its map on views into m_sName, so this object may be neither copied nor moved: either would
+    // leave a key pointing at storage that no longer holds the name.
+    CPBSMaterial( const CPBSMaterial & )             = delete;
+    CPBSMaterial & operator=( const CPBSMaterial & ) = delete;
+    CPBSMaterial( CPBSMaterial && )                  = delete;
+    CPBSMaterial & operator=( CPBSMaterial && )      = delete;
+  const std::string m_sName{};
     RwTexture * m_tSpecRoughness{};
   RwTexture * m_tNormals{};
 };
