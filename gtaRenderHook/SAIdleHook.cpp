@@ -498,6 +498,12 @@ void CSAIdleHook::RenderRealTimeShadows( const RwV3d &sundir )
 
     auto shadowRenderer = g_pDeferredRenderer->m_pShadowRenderer;
     m_uiDeferredStage = 2;
+    // DefinedState has already forced rwCULLMODECULLNONE for the frame, and the cubemap pass sets it again, so
+    // every cascade was rasterising both faces of every caster. Back-face culling is correct here because the
+    // near surface seen from the sun is the one that casts. The mode goes back afterwards so this stays scoped
+    // to the cascade pass and the G-buffer pass that follows keeps the state it had before.
+    const RwCullMode savedCullMode = g_pStateMgr->GetCullMode();
+    g_pStateMgr->SetCullMode( rwCULLMODECULLBACK );
     // with some cascades kept from earlier frames, each re-rendered cascade clears its own region instead
     if ( shadowRenderer->AllCascadesUpdated() )
         RwCameraClear( shadowRenderer->m_pShadowCamera, gColourTop, rwCAMERACLEARZ );
@@ -510,6 +516,7 @@ void CSAIdleHook::RenderRealTimeShadows( const RwV3d &sundir )
             CRendererRH::RenderShadowCascade( k );
         } );
     }
+    g_pStateMgr->SetCullMode( savedCullMode );
     shadowRenderer->m_bShadowsRendered = true;
     g_pDebug->printMsg( "Shadow Pass: end", 1 );
 }

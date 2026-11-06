@@ -300,12 +300,7 @@ public:
     */
     RwCullMode GetCullMode()
     {
-        switch ( m_rasterDesc.CullMode )
-        {
-        case D3D11_CULL_BACK:	return rwCULLMODECULLBACK;
-        case D3D11_CULL_FRONT:	return rwCULLMODECULLFRONT;
-        default:				return rwCULLMODECULLNONE;
-        }
+        return CD3D1XEnumParser::ConvertCullMode( m_rasterDesc.CullMode );
     }
     /*!
         Returns true if alpha blending is enabled.

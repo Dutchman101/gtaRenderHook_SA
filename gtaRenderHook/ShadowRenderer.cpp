@@ -309,9 +309,14 @@ void CShadowRenderer::RenderShadowToBuffer( int cascade, void( *render )( int ca
 }
 void CShadowRenderer::SetShadowBuffer() const
 {
-    // If shadow rendering has not ended we don't need to set shadow buffer
+    // CascadeCount doubles as the "shadows are usable this frame" flag for every sampler: each of
+    // SampleShadowCascades, SampleShadowCascadesSoft and SampleShadowCascadesUnfiltered is a loop bounded by
+    // it that falls through to return 1.0f, so publishing 0 makes the atlas read as fully lit. That is the only
+    // correct answer when RenderRealTimeShadows did not run this frame (shadows toggled off, interior, or full
+    // night), because the atlas still holds whatever the last rendered frame left in it, or nothing at all on
+    // the first frame, and FadeDistances/ViewProj were never recomputed for the current camera.
     m_pLightCB->data.ShadowSize = gShadowSettings.Size;
-    m_pLightCB->data.CascadeCount = gShadowSettings.ShadowCascadeCount;
+    m_pLightCB->data.CascadeCount = m_bShadowsRendered ? gShadowSettings.ShadowCascadeCount : 0;
     for ( auto i = 0; i < kMaxShadowCascades; i++ )
         m_pLightCB->data.ShadowBias[i] = gShadowSettings.BiasCoefficients[i];
     m_pLightCB->Update();

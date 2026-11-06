@@ -39,20 +39,23 @@ CD3D1XStateManager::CD3D1XStateManager()
     m_depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     m_depthStencilDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 
-    // stencil test parameters
-    m_depthStencilDesc.StencilEnable = true;
+    // stencil test parameters. Nothing in the render path asks for stencil, so the default keeps it off and
+    // uses KEEP everywhere: an INCR/DECR depth-fail op makes every pixel of every draw read and write the
+    // stencil buffer even when no one requested stencil. SetStencilZFail rewrites both faces for any request
+    // other than KEEP, so a caller that does want stencil still gets its op on both faces.
+    m_depthStencilDesc.StencilEnable = false;
     m_depthStencilDesc.StencilReadMask = 0xFF;
     m_depthStencilDesc.StencilWriteMask = 0xFF;
 
     // stencil operations if pixel is front-facing
     m_depthStencilDesc.FrontFace.StencilFailOp = D3D11_STENCIL_OP_KEEP;
-    m_depthStencilDesc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_INCR;
+    m_depthStencilDesc.FrontFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
     m_depthStencilDesc.FrontFace.StencilPassOp = D3D11_STENCIL_OP_KEEP;
     m_depthStencilDesc.FrontFace.StencilFunc = D3D11_COMPARISON_ALWAYS;
 
     // stencil operations if pixel is back-facing
     m_depthStencilDesc.BackFace.StencilFailOp = D3D11_STENCIL_OP_KEEP;
-    m_depthStencilDesc.BackFace.StencilDepthFailOp = D3D11_STENCIL_OP_DECR;
+    m_depthStencilDesc.BackFace.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
     m_depthStencilDesc.BackFace.StencilPassOp = D3D11_STENCIL_OP_KEEP;
     m_depthStencilDesc.BackFace.StencilFunc = D3D11_COMPARISON_ALWAYS;
     m_depthStencilDescOld = m_depthStencilDesc;

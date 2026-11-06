@@ -294,5 +294,11 @@ D3D11_CULL_MODE CD3D1XEnumParser::ConvertCullMode( RwCullMode mode )
 
 RwCullMode CD3D1XEnumParser::ConvertCullMode( D3D11_CULL_MODE mode )
 {
-    return RwCullMode();
+    switch ( mode )
+    {
+    case D3D11_CULL_BACK: return rwCULLMODECULLBACK;
+    case D3D11_CULL_FRONT: return rwCULLMODECULLFRONT;
+    default:
+        return rwCULLMODECULLNONE;
+    }
 }

@@ -120,6 +120,10 @@ CCubemapReflectionRenderer::~CCubemapReflectionRenderer()
     ( (RwV3d * (__cdecl *)(RwV3d *, int))0x56E010 )( outPoint, playerIndex )
 void CCubemapReflectionRenderer::RenderToCubemap( void ( *renderCB )() )
 {
+    // The render callback turns culling off so all six faces keep their geometry, so the mode in force when the
+    // pass started has to come back once the last face is done. Restoring inside the callback would cover only
+    // the first face, because the callback is invoked once per face.
+    const RwCullMode savedCullMode = g_pStateMgr->GetCullMode();
     // Move reflection camera to game camera position.
     auto  s_cam_frame = RwCameraGetFrame( m_pReflCamera );
     RwV3d campos;
@@ -140,6 +144,7 @@ void CCubemapReflectionRenderer::RenderToCubemap( void ( *renderCB )() )
     RenderOneFace( renderCB, 5, 0, At, 180, Up, campos );   // up
     ID3D11DeviceContext *context = GET_D3D_CONTEXT;
     context->GenerateMips( g_pEnvMapSRV );
+    g_pStateMgr->SetCullMode( savedCullMode );
 }
 
 void CCubemapReflectionRenderer::RenderOneFace(

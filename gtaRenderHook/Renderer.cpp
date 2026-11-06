@@ -1643,6 +1643,16 @@ void CRendererRH::RenderShadowCasterEntity( CEntity *entity )
     if ( entity->m_pRwObject == nullptr )
         return;
     entity->m_bImBeingRendered = true;
+    // Models with IDE flag 0x200000 have one-sided faces that have to stay visible from the sun too, which is the
+    // same rule RenderOneNonRoad applies in the main pass. The cascade pass runs with back-face culling on, so
+    // without this those casters lose their shadow once the sun crosses the plane of the face.
+    const bool disableCulling = entity->m_nType != eEntityType::ENTITY_TYPE_VEHICLE && !entity->m_bBackfaceCulled;
+    UINT savedCullMode = rwCULLMODECULLBACK;
+    if ( disableCulling )
+    {
+        g_pRwCustomEngine->RenderStateGet( rwRENDERSTATECULLMODE, savedCullMode );
+        g_pRwCustomEngine->RenderStateSet( rwRENDERSTATECULLMODE, rwCULLMODECULLNONE );
+    }
     // We need to render some sub-entities for peds
     if ( entity->m_nType == eEntityType::ENTITY_TYPE_PED )
     {
@@ -1656,6 +1666,8 @@ void CRendererRH::RenderShadowCasterEntity( CEntity *entity )
         entity->m_pRwAtomic->renderCallBack( entity->m_pRwAtomic );
     else
         _RpClumpRender( entity->m_pRwClump );
+    if ( disableCulling )
+        g_pRwCustomEngine->RenderStateSet( rwRENDERSTATECULLMODE, savedCullMode );
     entity->m_bImBeingRendered = false;
 }
 
