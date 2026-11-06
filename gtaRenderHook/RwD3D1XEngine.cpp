@@ -1543,21 +1543,26 @@ bool CRwD3D1XEngine::SkinAllInOneNode( RxPipelineNode * self, const RxPipelineNo
 
 void CRwD3D1XEngine::SetRenderTargets( RwRaster ** rasters, RwRaster* zBuffer, RwUInt32 rasterCount )
 {
+    // Every index below is read through the caller's array, so an absent array is the same as zero targets.
+    if ( rasters == nullptr )
+        rasterCount = 0;
 
     auto context = m_pRenderer->getContext();
-    std::vector<ID3D11RenderTargetView*> pRTVs;
-    for ( RwUInt32 i = 0; i < rasterCount; i++ )
+    // Fixed-size instead of a vector: this runs several times per frame and per shadow cascade, and the binding count is
+    // bounded by what Direct3D itself accepts.
+    ID3D11RenderTargetView * pRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    RwUInt32 boundCount = 0;
+    for ( RwUInt32 i = 0; i < rasterCount && boundCount < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
     {
         if ( rasters[i] != nullptr )
         {
             RwD3D1XRaster* pd3dRaster = GetD3D1XRaster( rasters[i] );
             auto renderTarget = dynamic_cast<ID3D1XRenderTargetViewable*>( pd3dRaster->resourse );
-            pRTVs.push_back( renderTarget ? renderTarget->GetRenderTargetView() : nullptr );
+            pRTVs[boundCount] = renderTarget ? renderTarget->GetRenderTargetView() : nullptr;
         }
-        else
-            pRTVs.push_back( nullptr );
+        boundCount++;
     }
-    if ( rasters[0] != nullptr )
+    if ( rasterCount > 0 && rasters[0] != nullptr )
     {
         D3D11_VIEWPORT vp;
         vp.Width = (float)rasters[0]->width;
@@ -1570,54 +1575,75 @@ void CRwD3D1XEngine::SetRenderTargets( RwRaster ** rasters, RwRaster* zBuffer, R
     if ( zBuffer )
     {
         RwD3D1XRaster* pd3dDepthRaster = GetD3D1XRaster( zBuffer );
-        auto depthTarget = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse );
-        g_pStateMgr->SetRenderTargets( pRTVs.size(), pRTVs.data(), depthTarget->GetDepthStencilView() );
+        // The depth view is bound only when the raster really carries a depth-stencil resource. Anything else binds no
+        // depth buffer at all, instead of dereferencing a lookup or a cast that came back empty.
+        ID3D11DepthStencilView* depthStencilView = nullptr;
+        if ( pd3dDepthRaster != nullptr )
+        {
+            if ( auto depthTarget = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse ) )
+                depthStencilView = depthTarget->GetDepthStencilView();
+        }
+        g_pStateMgr->SetRenderTargets( boundCount, pRTVs, depthStencilView );
     }
     else
-        g_pStateMgr->SetRenderTargets( pRTVs.size(), pRTVs.data(), nullptr );
+        g_pStateMgr->SetRenderTargets( boundCount, pRTVs, nullptr );
     if ( rasterCount >= 1 )
     {
         float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        for ( auto rtv : pRTVs )
-            if ( rtv != nullptr )
-                context->ClearRenderTargetView( rtv, clearColor );
+        for ( RwUInt32 i = 0; i < boundCount; i++ )
+            if ( pRTVs[i] != nullptr )
+                context->ClearRenderTargetView( pRTVs[i], clearColor );
     }
 }
 
 void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** uavs, RwRaster* zBuffer, RwUInt32 rasterCount, RwUInt32 uavCount, RwUInt32 uavStart )
 {
-    RwD3D1XRaster* pd3dDepthRaster = GetD3D1XRaster( zBuffer );
+    // No colour targets at all is a valid request here: the caller still gets its depth buffer and UAVs bound, which is
+    // the reason this entry point exists next to SetRenderTargets. An absent array is therefore the same as zero.
+    if ( rasters == nullptr )
+        rasterCount = 0;
+
     ID3D11DepthStencilView* depthStencilRes = nullptr;
-    if ( zBuffer&&pd3dDepthRaster )
+    if ( zBuffer )
     {
-        depthStencilRes = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse )->GetDepthStencilView();
+        RwD3D1XRaster* pd3dDepthRaster = GetD3D1XRaster( zBuffer );
+        if ( pd3dDepthRaster )
+        {
+            if ( auto depthTarget = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse ) )
+                depthStencilRes = depthTarget->GetDepthStencilView();
+        }
     }
-    std::vector<ID3D11RenderTargetView*> pRTVs;
+    // Slot-preserving like SetRenderTargets: an entry that resolves to nothing keeps its index, so the views after it do
+    // not slide down into lower SV_Target numbers.
+    ID3D11RenderTargetView * pRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    RwUInt32 boundCount = 0;
     std::vector<ID3D11UnorderedAccessView*> pUAVs;
-    if ( rasters[0] == nullptr )
-        return;
-    for ( RwUInt32 i = 0; i < rasterCount; ++i )
+    for ( RwUInt32 i = 0; i < rasterCount && boundCount < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
     {
         if ( rasters[i] )
         {
             RwD3D1XRaster* pd3dRaster = GetD3D1XRaster( rasters[i] );
             auto renderTarget = dynamic_cast<ID3D1XRenderTargetViewable*>( pd3dRaster->resourse );
-            pRTVs.push_back( renderTarget ? renderTarget->GetRenderTargetView() : nullptr );
+            pRTVs[boundCount] = renderTarget ? renderTarget->GetRenderTargetView() : nullptr;
         }
+        boundCount++;
     }
-    D3D11_VIEWPORT vp;
-    vp.Width = static_cast<FLOAT>( rasters[0]->width );
-    vp.Height = static_cast<FLOAT>( rasters[0]->height );
-    vp.MaxDepth = 1;
-    vp.MinDepth = 0;
-    vp.TopLeftX = 0; vp.TopLeftY = 0;
+    if ( boundCount > 0 && rasters[0] != nullptr )
+    {
+        D3D11_VIEWPORT vp;
+        vp.Width = static_cast<FLOAT>( rasters[0]->width );
+        vp.Height = static_cast<FLOAT>( rasters[0]->height );
+        vp.MaxDepth = 1;
+        vp.MinDepth = 0;
+        vp.TopLeftX = 0; vp.TopLeftY = 0;
 
-    g_pStateMgr->SetViewport( vp );
-    if ( uavs[0] == nullptr )
+        g_pStateMgr->SetViewport( vp );
+    }
+    if ( uavs == nullptr || uavCount == 0 || uavs[0] == nullptr )
     {
         ID3D11UnorderedAccessView* puav = nullptr;
 
-        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( pRTVs.size(), pRTVs.data(), depthStencilRes,
+        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( boundCount, pRTVs, depthStencilRes,
                                                                               uavStart, 1, &puav, nullptr );
         return;
     }
@@ -1627,13 +1653,15 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
         pUAVs.push_back(pd3dRaster->resourse->GetUAV());
     }*/
 
-    m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( pRTVs.size(), pRTVs.data(), depthStencilRes,
-                                                                          uavStart, pUAVs.size(), pUAVs.data(), nullptr );
-    if ( rasterCount > 1 )
+    m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( boundCount, pRTVs, depthStencilRes,
+                                                                          uavStart, static_cast<UINT>( pUAVs.size() ),
+                                                                          pUAVs.data(), nullptr );
+    if ( boundCount > 1 )
     {
         float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        for ( auto rtv : pRTVs )
-            m_pRenderer->getContext()->ClearRenderTargetView( rtv, clearColor );
+        for ( RwUInt32 i = 0; i < boundCount; i++ )
+            if ( pRTVs[i] != nullptr )
+                m_pRenderer->getContext()->ClearRenderTargetView( pRTVs[i], clearColor );
     }
 }
 
