@@ -241,6 +241,11 @@ void CWaterLevel::RenderWaterRectangle( int x0, int x1, int y0, int y1, const CR
         maxY = y0;
     }*/
     RenderDetailedWaterRectangle_OneLayer( x0, x1, y0, y1, a, b, c, d, 0 );
+    // Every water rectangle is drawn at full detail on purpose: the distance split below feeds
+    // RenderFlatWaterRectangle_OneLayer, which only ever sets objNormal.z and never runs CalculateWavesForCoordinate, so
+    // far water would lose its wave normals and shade differently from near water. Re-enabling the split needs a flat
+    // path that produces usable normals first; until then the branch stays unreachable rather than silently returning
+    // to it. CameraRangeMinX/MinY and CameraRangeMaxX/MaxY are written by SetCameraRange for that branch only.
     return;
     if ( x0 >= CameraRangeMaxX || x1 <= CameraRangeMinX || y0 >= CameraRangeMaxY || y1 <= CameraRangeMinY )
     {

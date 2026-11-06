@@ -6,21 +6,30 @@
 #include <filesystem>
 
 RwTexDictionary *                               CPBSMaterialMgr::materialsTXD;
-std::unordered_map<std::string, CPBSMaterial *> CPBSMaterialMgr::materials{};
-bool has_suffix( const std::string &s, const std::string &suffix )
+std::unordered_map<std::string_view, CPBSMaterial *, CPBSMaterialNameHash, CPBSMaterialNameEqual>
+    CPBSMaterialMgr::materials{};
+namespace
 {
-    return ( s.size() >= suffix.size() ) &&
-           std::equal( suffix.rbegin(), suffix.rend(), s.rbegin() );
+    constexpr const char *kMaterialExtension = ".mat";
+
+    // Case-insensitive suffix test using the same folding as the name lookup above, so the extension a file is
+    // accepted under and the name it is later matched by can never disagree on case.
+    bool HasSuffix( std::string_view text, std::string_view suffix )
+    {
+        return text.size() >= suffix.size() &&
+               CPBSMaterialNameEqual{}( text.substr( text.size() - suffix.size() ), suffix );
+    }
 }
+
 CPBSMaterial::CPBSMaterial( const std::string &fname )
-    : m_sName( has_suffix( fname, ".mat" )
+    : m_sName( HasSuffix( fname, kMaterialExtension )
                    ? std::filesystem::path( fname ).stem().string()
                    : fname )
 {
     if ( CPBSMaterialMgr::materialsTXD == nullptr )
         return;
     auto file = fopen(
-        ( has_suffix( fname, ".mat" ) ? fname : ( std::string( "materials\\" ) + m_sName + ".mat" ) ).c_str(), "rt" );
+        ( HasSuffix( fname, kMaterialExtension ) ? fname : ( std::string( "materials\\" ) + m_sName + kMaterialExtension ) ).c_str(), "rt" );
     char specFileName[80]{};
     char normalFileName[80]{};
     if ( file )
@@ -55,7 +64,6 @@ void CPBSMaterialMgr::LoadMaterials()
     materials.clear();
     materialsTXD = nullptr;
     std::string     path( "materials/" );
-    std::string     ext( ".mat" );
     std::error_code ec;
     if ( !std::filesystem::exists( path, ec ) )
     {
@@ -83,16 +91,23 @@ void CPBSMaterialMgr::LoadMaterials()
     auto dir_iter = std::filesystem::recursive_directory_iterator( path, ec );
     for ( auto &p : dir_iter )
     {
-        if ( p.path().extension() == ext )
+        if ( HasSuffix( p.path().extension().string(), kMaterialExtension ) )
         {
             auto materialptr = new CPBSMaterial( p.path().string() );
             if ( materialptr->m_tSpecRoughness != nullptr &&
                  materialptr->m_tSpecRoughness->raster != nullptr )
             {
-                auto it = materials.find( materialptr->m_sName );
+                const std::string_view name( materialptr->m_sName );
+                auto it = materials.find( name );
                 if ( it != materials.end() )
-                    delete it->second;
-                materials[materialptr->m_sName] = materialptr;
+                {
+                    // The stored key is a view into the material being replaced, so the entry has to go before the
+                    // delete or the map would be left holding a key into freed storage.
+                    CPBSMaterial *duplicate = it->second;
+                    materials.erase( it );
+                    delete duplicate;
+                }
+                materials.emplace( name, materialptr );
             }
             else
             {
@@ -108,6 +123,6 @@ CPBSMaterial *CPBSMaterialMgr::FindMaterial( const char *textureName )
 {
     if ( textureName == nullptr || textureName[0] == '\0' || materials.empty() )
         return nullptr;
-    auto it = materials.find( textureName );
+    auto it = materials.find( std::string_view( textureName ) );
     return ( it != materials.end() ) ? it->second : nullptr;
 }

@@ -90,7 +90,7 @@ void SettingsHolder::InitGUI()
     // Init new settings bar
     TwDefine( " GLOBAL iconpos=topleft " );
     m_pGuiholder = TwNewBar( "Settings" );
-    TwDefine( " Settings label='RenderHook Settings (F12)' position='16 16' size='260 360' iconified=true " );
+    TwDefine( " Settings label='RenderHook Settings (F12)' position='16 16' size='260 360' " );
     // Init each settings block
     for ( auto block : m_aSettingsBlocks )
         block->InitGUI( m_pGuiholder );
@@ -101,7 +101,9 @@ void SettingsHolder::InitGUI()
 
 void SettingsHolder::DrawGUI()
 {
-    if ( m_pGuiholder == nullptr ) return;
+    // TwDraw writes to the device context and every call below only repairs what TwDraw changed, so the
+    // gate has to cover the whole body: with the bar hidden there is nothing drawn and nothing to repair.
+    if ( !m_bDrawTweakBar || m_pGuiholder == nullptr ) return;
 
     TwDraw();
     if ( g_pStateMgr )
@@ -124,23 +126,17 @@ bool SettingsHolder::IsGUIEnabled()
 
 void SettingsHolder::EnableGUI()
 {
-    if ( !m_bDrawTweakBar )
-    {
-        m_bDrawTweakBar = true;
-        if ( m_pGuiholder != nullptr )
-            TwDefine( " Settings iconified=false " );
-    }
+    m_bDrawTweakBar = true;
 }
 
 void SettingsHolder::DisableGUI()
 {
-    if ( m_bDrawTweakBar )
-    {
-        m_bDrawTweakBar = false;
-        if ( m_pGuiholder != nullptr )
-            TwDefine( " Settings iconified=true " );
-        ReleaseCapture();
-    }
+    if ( !m_bDrawTweakBar )
+        return;
+    m_bDrawTweakBar = false;
+    // The bar takes the mouse capture while visible, so the capture is only released on the enabled to
+    // disabled transition, which is the only path where this code takes the capture away.
+    ReleaseCapture();
 }
 
 void DebugSettingsBlock::Reset()
