@@ -363,11 +363,11 @@ public:
     }
 private:
     ID3D11BlendState*			m_pBlendState = nullptr;
-    ID3D11BlendState*	m_pBlendState_Default = nullptr;
-    ID3D11BlendState*   m_pBlendState_AlphaBlend = nullptr;
-    ID3D11BlendState*   m_pBlendState_BlendDestOne = nullptr;
-    ID3D11BlendState*   m_pBlendState_NoBlendDestOne = nullptr;
-    ID3D11BlendState*   m_pBlendState_BlendAdditive = nullptr;
+    ID3D11BlendState*	m_pBlendState_Default;
+    ID3D11BlendState*   m_pBlendState_AlphaBlend;
+    ID3D11BlendState*   m_pBlendState_BlendDestOne;
+    ID3D11BlendState*   m_pBlendState_NoBlendDestOne;
+    ID3D11BlendState*   m_pBlendState_BlendAdditive;
     ID3D11RasterizerState*		m_pRasterState = nullptr;
     ID3D11DepthStencilState*	m_pDepthStencilState = nullptr;
     ID3D11SamplerState*			m_pSamplerState = nullptr;
@@ -378,7 +378,7 @@ private:
     ID3D11InputLayout*			m_pCurrentInputLayout = nullptr;
     ID3D11Buffer*				m_pCurrentVertexBuffer = nullptr;
     ID3D11Buffer*				m_pCurrentIndexBuffer = nullptr;
-    ID3D11RenderTargetView*     m_pCurrentRenderTargets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    ID3D11RenderTargetView*     m_pCurrentRenderTargets[8];
     ID3D11DepthStencilView*     m_pCurrentDepthStencilView = nullptr;
 
     D3D11_RASTERIZER_DESC		m_rasterDesc{};
@@ -390,7 +390,7 @@ private:
     D3D11_SAMPLER_DESC			m_sampDesc{};
     D3D11_SAMPLER_DESC			m_sampDescOld{};
     D3D11_SAMPLER_DESC			m_compSampDesc{};
-    D3D10_PRIMITIVE_TOPOLOGY	m_currentPrimitiveTopology{};
+    D3D10_PRIMITIVE_TOPOLOGY	m_currentPrimitiveTopology;
     D3D11_VIEWPORT				m_viewport{};
     D3D11_VIEWPORT				m_viewportOld{};
 
@@ -398,23 +398,22 @@ private:
     UINT						m_currentAlphaTestType = 1;
     UINT						m_currentVBufferStride = -1;
     UINT						m_currentVBufferOffset = -1;
+    UINT						m_currentRenderTargetNeedsUpdate = 0;
 
-    // FlushStates runs before every setter has necessarily been called, so each flag states that its state is pending
-    // rather than relying on whichever setter happens to run first.
-    bool						m_bRasterDescReqUpdate = false;
-    bool						m_bDepthStencilDescReqUpdate = false;
+    bool						m_bRasterDescReqUpdate;
+    bool						m_bDepthStencilDescReqUpdate;
     bool						m_bReversedZ = false;
     // depth function as requested, before the reversed Z mirroring
     D3D11_COMPARISON_FUNC		m_depthFunc = D3D11_COMPARISON_LESS_EQUAL;
-    bool						m_bBlendDescReqUpdate = false;
-    bool						m_bSampDescReqUpdate = false;
-    bool						m_bTopologyReqUpdate = false;
-    bool						m_bGlobalValuesReqUpdate = false;
-    bool						m_bInputLayoutReqUpdate = false;
-    bool						m_bRasterReqUpdate = false;
-    bool						m_bIndexBufferReqUpdate = false;
-    bool						m_bVertexBufferReqUpdate = false;
-    bool						m_bRenderTargetReqUpdate = false;
+    bool						m_bBlendDescReqUpdate;
+    bool						m_bSampDescReqUpdate;
+    bool						m_bTopologyReqUpdate;
+    bool						m_bGlobalValuesReqUpdate;
+    bool						m_bInputLayoutReqUpdate;
+    bool						m_bRasterReqUpdate;
+    bool						m_bIndexBufferReqUpdate;
+    bool						m_bVertexBufferReqUpdate;
+    bool						m_bRenderTargetReqUpdate;
 };
 extern CD3D1XStateManager* g_pStateMgr;
 #endif // D3D1XStateManager_h__
