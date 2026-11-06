@@ -171,6 +171,14 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
 
     g_pStateMgr->SetConstantBufferVS( m_pSkinningDataBuffer, 3 );
 
+    // The shadow stage substitutes m_pShadowPS for the forward and deferred shaders, and RwSkin's ShadowPS body is
+    // empty, so nothing in that stage reads the per-material constants written below. Leaving them alone for the stage
+    // avoids four constant-buffer comparisons per drawn mesh without changing what the shadow pass sees.
+    const bool bUpdatesMaterial = m_uiDeferredStage != 2;
+    // The blend state is set per mesh below, so the caller's value is saved and restored the way the two building
+    // pipelines do it rather than being left at whatever the last mesh needed.
+    const BOOL oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
+
     // iterate over materials and draw them
 
     RxD3D9InstanceData* model;
@@ -187,11 +195,14 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
         {
             alphaBlend |= GetD3D1XRaster( material->texture->raster )->alpha;
             g_pRwCustomEngine->SetTexture( material->texture, 0 );
-            g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( material->color );
-            auto glossiness = 0.1f;
-            auto intensity = 0.2f;
-            g_pRenderBuffersMgr->UpdateMaterialGlossiness( glossiness );
-            g_pRenderBuffersMgr->UpdateMaterialSpecularInt( intensity );
+            if ( bUpdatesMaterial )
+            {
+                g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( material->color );
+                auto glossiness = 0.1f;
+                auto intensity = 0.2f;
+                g_pRenderBuffersMgr->UpdateMaterialGlossiness( glossiness );
+                g_pRenderBuffersMgr->UpdateMaterialSpecularInt( intensity );
+            }
 
             // set physically based shading material params
             // TODO: add a method for material initialization
@@ -209,9 +220,12 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
         else
         {
             g_pRwCustomEngine->SetTexture( nullptr, 0 );
-            g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( material->color );
-            g_pRenderBuffersMgr->UpdateMaterialGlossiness( 0.1f );
-            g_pRenderBuffersMgr->UpdateMaterialSpecularInt( 0.2f );
+            if ( bUpdatesMaterial )
+            {
+                g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( material->color );
+                g_pRenderBuffersMgr->UpdateMaterialGlossiness( 0.1f );
+                g_pRenderBuffersMgr->UpdateMaterialSpecularInt( 0.2f );
+            }
         }
         // set alpha blending
         g_pStateMgr->SetAlphaBlendEnable( m_uiDeferredStage == 1 ? FALSE : alphaBlend > 0 );
@@ -224,6 +238,7 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
         if ( bHasSpecTex )
             g_pStateMgr->SetRaster( nullptr, 1 );
     }
+    g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
 }
 
 void CD3D1XSkinPipeline::GenerateNormals( SimpleVertexSkin * verticles, unsigned int vertexCount, RpTriangle* triangles, unsigned int triangleCount )

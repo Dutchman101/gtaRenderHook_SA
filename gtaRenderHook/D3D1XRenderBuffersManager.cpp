@@ -327,36 +327,34 @@ void CD3D1XRenderBuffersManager::SetMatrixBuffer()
 void CD3D1XRenderBuffersManager::UpdateMaterialDiffuseColor(
     const RwRGBA &color )
 {
-    auto currentColor = m_pPerMaterialBuffer->data.diffuseColor;
-
-    if ( RWRGBALONG( ( BYTE )( currentColor.red * 255 ),
-                     ( BYTE )( currentColor.green * 255 ),
-                     ( BYTE )( currentColor.blue * 255 ),
-                     ( BYTE )( currentColor.alpha * 255 ) ) !=
-         RWRGBALONG( color.red, color.green, color.blue, color.alpha ) )
+    const RwRGBAReal target{ (float)color.red / 255.0f, (float)color.green / 255.0f,
+                             (float)color.blue / 255.0f, (float)color.alpha / 255.0f };
+    // Compared against the exact value this writer stores, not through a byte round trip: the same RwRGBA always
+    // produces the same bits, so equality is the right test, and the field is shared with the emissive writer below
+    // which stores the same channel up to sixteen times larger. A byte comparison against that scale is both
+    // inexact and, past 255, undefined.
+    const auto &currentColor = m_pPerMaterialBuffer->data.diffuseColor;
+    if ( currentColor.red != target.red || currentColor.green != target.green ||
+         currentColor.blue != target.blue || currentColor.alpha != target.alpha )
     {
-        m_pPerMaterialBuffer->data.diffuseColor = RwRGBAReal{
-            (float)color.red / 255.0f, (float)color.green / 255.0f,
-            (float)color.blue / 255.0f, (float)color.alpha / 255.0f };
-        m_bMaterialBufferRequiresUpdate = true;
+        m_pPerMaterialBuffer->data.diffuseColor = target;
+        m_bMaterialBufferRequiresUpdate         = true;
     }
 }
 
 void CD3D1XRenderBuffersManager::UpdateMaterialEmmissiveColor(
     const RwRGBA &color )
 {
-    auto currentColor = m_pPerMaterialBuffer->data.diffuseColor;
-    if ( RWRGBALONG( ( BYTE )( currentColor.red / 16.0f * 255 ),
-                     ( BYTE )( currentColor.green / 16.0f * 255 ),
-                     ( BYTE )( currentColor.blue / 16.0f * 255 ),
-                     ( BYTE )( currentColor.alpha / 16.0f * 255 ) ) !=
-         RWRGBALONG( color.red, color.green, color.blue, color.alpha ) )
+    const RwRGBAReal target{ (float)color.red / 255.0f * 16.0f, (float)color.green / 255.0f * 16.0f,
+                             (float)color.blue / 255.0f * 16.0f, (float)color.alpha / 255.0f };
+    // Same comparison as the diffuse writer, done in this writer's own scale. A boosted channel reaches sixteen, so
+    // turning it back into a byte to compare would leave the byte range and wrap.
+    const auto &currentColor = m_pPerMaterialBuffer->data.diffuseColor;
+    if ( currentColor.red != target.red || currentColor.green != target.green ||
+         currentColor.blue != target.blue || currentColor.alpha != target.alpha )
     {
-        m_pPerMaterialBuffer->data.diffuseColor = RwRGBAReal{
-            (float)color.red / 255.0f * 16.0f,
-            (float)color.green / 255.0f * 16.0f,
-            (float)color.blue / 255.0f * 16.0f, (float)color.alpha / 255.0f };
-        m_bMaterialBufferRequiresUpdate = true;
+        m_pPerMaterialBuffer->data.diffuseColor = target;
+        m_bMaterialBufferRequiresUpdate         = true;
     }
 }
 

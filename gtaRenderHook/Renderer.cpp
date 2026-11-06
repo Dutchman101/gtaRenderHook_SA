@@ -278,8 +278,6 @@ char CRendererRH::AddEntityToShadowCasterList( CEntity * entity, float renderDis
         return false;
     if ( entity->m_pRwObject == nullptr )
     {
-        if ( !CanEntityCastShadow( entity ) )
-            return false;
         entity->CreateRwObject();
         if ( entity->m_pRwObject == nullptr )
             return false;
@@ -308,8 +306,6 @@ void CRendererRH::AddEntityToShadowCastersIfNeeded( CEntity * entity, bool check
     float xDist = ms_vecCameraPosition.x - pos.x;
     float yDist = ms_vecCameraPosition.y - pos.y;
     float zDist = ms_vecCameraPosition.z - pos.z;
-    float lodStartDist = gShadowSettings.GetFloat( "LodShadowsMinDistance" );
-    lodStartDist *= lodStartDist;
     float renderDistance = xDist * xDist + yDist * yDist + zDist * zDist;
 
     CBaseModelInfo* modelInfo = CModelInfo::ms_modelInfoPtrs[modelID];
@@ -1501,10 +1497,19 @@ void CRendererRH::ScanWorld()
     m_loadingPriority = 0;
     ms_aVisibleReflectionObjects.clear();
     ms_aActiveShadowCasters.clear();
-    for ( int i = 0; i < 4; i++ )
+    for ( int i = 0; i < kMaxShadowCascades; i++ )
         ms_aVisibleShadowCasters[i].clear();
-    for ( auto i = 0; i < 4; i++ )
-        CalculateShadowBoundingPlanes( i );
+    // The only writers of the light space matrix, the light box and the light position are PrepareRealTimeShadows and
+    // CShadowRenderer::CalculateCameraPos, which RenderInGame skips whenever shadows are disabled, the camera is in an
+    // interior, or the day-night balance has fully faded them in. The plane inputs are frozen there, so rebuilding the
+    // planes would reproduce the same five distances; skipping the rebuild is therefore equivalent and not a stale-data
+    // gamble. Every reader of ms_aShadowCasterBoundingPlanes loops below ShadowCascadeCount, so no cascade past the
+    // configured count is ever read either.
+    if ( gShadowSettings.GetToggleField( "Enable" ) && !CGame::currArea && CSAIdleHook::m_fShadowDNBalance < 1.0f )
+    {
+        for ( int i = 0; i < gShadowSettings.ShadowCascadeCount; i++ )
+            CalculateShadowBoundingPlanes( i );
+    }
     int currentSectorX = (int)ceil( ( ms_vecCameraPosition.x - 25.0f ) / 50.0f + 60.0f );
     int currentSectorY = (int)ceil( ( ms_vecCameraPosition.y - 25.0f ) / 50.0f + 60.0f );
     // TODO: Add reflections culling
@@ -1681,9 +1686,14 @@ void CRendererRH::CalculateShadowBoundingPlanes( int shadowCascade )
     auto lightSpaceFrustum = g_pDeferredRenderer->m_pShadowRenderer->m_LightSpaceMatrix[shadowCascade];
     RW::V3d  LightAABBCenter = { g_pDeferredRenderer->m_pShadowRenderer->m_LightPos[shadowCascade] };
     RW::BBox lightAABB = g_pDeferredRenderer->m_pShadowRenderer->m_LightBBox[shadowCascade];
-    auto lightAABBX = lightAABB.getSizeX();
-    auto lightAABBY = lightAABB.getSizeY();
-    auto lightAABBZ = lightAABB.getSizeZ();
+    // The shadow camera's view window is set from half the crate size (ShadowRenderer.cpp), so the two side planes sit
+    // half a size from the centre, not a full size. Narrowing them can only reject a caster that is entirely behind
+    // them, which the shadow map does not contain either. The Z plane has to reach the shadow camera's far clip, which
+    // is the crate's Z size plus kShadowFarClipMargin, or casters in that last stretch are culled while the shadow map
+    // still renders them.
+    auto lightAABBX = lightAABB.getSizeX() * 0.5f;
+    auto lightAABBY = lightAABB.getSizeY() * 0.5f;
+    auto lightAABBZ = lightAABB.getSizeZ() + kShadowFarClipMargin;
     auto rightAxis = lightSpaceFrustum.getRightv3();
     auto upAxis = lightSpaceFrustum.getUpv3();
     auto atAxis = lightSpaceFrustum.getAtv3();
