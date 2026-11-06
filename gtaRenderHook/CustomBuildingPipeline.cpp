@@ -187,19 +187,12 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
             g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor( color );
         else
             g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( color );
-        // The shadow stage draws with SACustomBuilding's ShadowPS, which reads txDiffuse and cDiffuseColor, so the
-        // diffuse and emissive updates above have to stay unconditional or alpha-cutout shadows lose their cutout.
-        // Specular and glossiness are not read by that shader at all, so the two engine queries that produce them are
-        // skipped for that stage as well, not just the buffer writes they feed.
-        if ( m_uiDeferredStage != 2 )
-        {
-            float fSpec = ( std::max )(
-                CWeather::WetRoads,
-                CCustomCarEnvMapPipeline__GetFxSpecSpecularity( mesh.material ) );
-            float fGlossiness = RpMaterialGetFxEnvShininess( mesh.material );
-            g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
-            g_pRenderBuffersMgr->UpdateMaterialGlossiness( fGlossiness );
-        }
+        float fSpec = ( std::max )(
+            CWeather::WetRoads,
+            CCustomCarEnvMapPipeline__GetFxSpecSpecularity( mesh.material ) );
+        float fGlossiness = RpMaterialGetFxEnvShininess( mesh.material );
+        g_pRenderBuffersMgr->UpdateMaterialSpecularInt( fSpec );
+        g_pRenderBuffersMgr->UpdateMaterialGlossiness( fGlossiness );
         //}
         const RwUInt8 effectiveAlpha = ( m_uiDeferredStage == 1 && CRendererRH::FadingPass ) ? 255 : mesh.material->color.alpha;
         bAlphaEnable |= effectiveAlpha != 255 || vertexAlpha;

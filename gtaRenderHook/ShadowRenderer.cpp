@@ -281,7 +281,7 @@ void CShadowRenderer::RenderShadowToBuffer( int cascade, void( *render )( int ca
     RwCameraSetViewWindow( m_pShadowCamera, &vw );
     float fLightZFar = m_LightBBox[cascade].getSizeZ();//faLightDim[1];
     RwCameraSetNearClipPlane( m_pShadowCamera, -500 /*-fLightZFar-25*/ );
-    RwCameraSetFarClipPlane( m_pShadowCamera, fLightZFar + kShadowFarClipMargin );
+    RwCameraSetFarClipPlane( m_pShadowCamera, fLightZFar + 25 );
     RwCameraSync( m_pShadowCamera );
     //
     RwCameraBeginUpdate( m_pShadowCamera );

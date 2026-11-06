@@ -90,8 +90,7 @@ void SettingsHolder::InitGUI()
     // Init new settings bar
     TwDefine( " GLOBAL iconpos=topleft " );
     m_pGuiholder = TwNewBar( "Settings" );
-    // The bar is shown and hidden with F12, so its own minimise button would leave it collapsed with no way back.
-    TwDefine( " Settings label='RenderHook Settings (F12)' position='16 16' size='260 360' iconifiable=false " );
+    TwDefine( " Settings label='RenderHook Settings (F12)' position='16 16' size='260 360' iconified=true " );
     // Init each settings block
     for ( auto block : m_aSettingsBlocks )
         block->InitGUI( m_pGuiholder );
@@ -102,9 +101,7 @@ void SettingsHolder::InitGUI()
 
 void SettingsHolder::DrawGUI()
 {
-    // TwDraw writes to the device context and every call below only repairs what TwDraw changed, so the
-    // gate has to cover the whole body: with the bar hidden there is nothing drawn and nothing to repair.
-    if ( !m_bDrawTweakBar || m_pGuiholder == nullptr ) return;
+    if ( m_pGuiholder == nullptr ) return;
 
     TwDraw();
     if ( g_pStateMgr )
@@ -127,27 +124,23 @@ bool SettingsHolder::IsGUIEnabled()
 
 void SettingsHolder::EnableGUI()
 {
-    // Called every frame while the bar is visible, so the definition below must run only on the transition.
-    if ( m_bDrawTweakBar )
-        return;
-    m_bDrawTweakBar = true;
-    if ( m_pGuiholder != nullptr )
-        TwDefine( " Settings iconified=false " );
+    if ( !m_bDrawTweakBar )
+    {
+        m_bDrawTweakBar = true;
+        if ( m_pGuiholder != nullptr )
+            TwDefine( " Settings iconified=false " );
+    }
 }
 
 void SettingsHolder::DisableGUI()
 {
-    if ( !m_bDrawTweakBar )
-        return;
-    m_bDrawTweakBar = false;
-    // The bar takes the mouse capture while visible, so the capture is only released on the enabled to
-    // disabled transition, which is the only path where this code takes the capture away.
-    ReleaseCapture();
-    // AntTweakBarHookMsgProc stops forwarding messages to the bar while it is disabled, so a button release
-    // arriving after this point never reaches AntTweakBar and a drag would still be running when the bar returns.
-    // The release is delivered here instead, on the same transition and nowhere else.
-    if ( m_pGuiholder != nullptr )
-        TwMouseButton( TW_MOUSE_RELEASED, TW_MOUSE_LEFT );
+    if ( m_bDrawTweakBar )
+    {
+        m_bDrawTweakBar = false;
+        if ( m_pGuiholder != nullptr )
+            TwDefine( " Settings iconified=true " );
+        ReleaseCapture();
+    }
 }
 
 void DebugSettingsBlock::Reset()

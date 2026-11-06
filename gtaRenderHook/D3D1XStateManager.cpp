@@ -17,7 +17,7 @@ CD3D1XStateManager::CD3D1XStateManager()
     auto dev = GET_D3D_DEVICE;
     auto context = GET_D3D_CONTEXT;
     // initialize render target list
-    for ( int i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
+    for ( int i = 0; i < 8; i++ )
         m_pCurrentRenderTargets[i] = nullptr;
     // default blend description with blending disabled
     m_blendDesc.RenderTarget[0].BlendEnable = false;
@@ -662,18 +662,21 @@ void CD3D1XStateManager::SetFogRange( float range )
 
 void CD3D1XStateManager::SetRenderTargets( unsigned int count, ID3D11RenderTargetView * const * ppRenderTargets, ID3D11DepthStencilView * pDepthTarget )
 {
-    // Both loops below index the cached array, which holds exactly this many slots, so a larger caller count would write
-    // past its end.
-    count = min( count, static_cast< unsigned int >( D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT ) );
     if ( ppRenderTargets == nullptr )
     {
         for ( UINT i = 0; i < count; i++ )
         {
             if ( m_pCurrentRenderTargets[i] != nullptr )
             {
+                m_currentRenderTargetNeedsUpdate = max( m_currentRenderTargetNeedsUpdate, i + 1 );
                 m_pCurrentRenderTargets[i] = nullptr;
                 m_bRenderTargetReqUpdate = true;
             }
+        }
+        if ( pDepthTarget != m_pCurrentDepthStencilView )
+        {
+            m_pCurrentDepthStencilView = pDepthTarget;
+            m_bRenderTargetReqUpdate = true;
         }
     }
     else
@@ -682,27 +685,16 @@ void CD3D1XStateManager::SetRenderTargets( unsigned int count, ID3D11RenderTarge
         {
             if ( m_pCurrentRenderTargets[i] != ppRenderTargets[i] )
             {
+                m_currentRenderTargetNeedsUpdate = max( m_currentRenderTargetNeedsUpdate, i + 1 );
                 m_pCurrentRenderTargets[i] = ppRenderTargets[i];
                 m_bRenderTargetReqUpdate = true;
             }
         }
-    }
-    // Slots at or past count are not written by this caller, so whatever is still cached there belongs to an earlier
-    // binding that this call replaces with fewer targets, including none. FlushRenderTargets only re-issues when one of
-    // these flags is raised, so without clearing them the previous colour targets stay bound in the device while the
-    // caller believes it asked for a different set.
-    for ( UINT i = count; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
-    {
-        if ( m_pCurrentRenderTargets[i] != nullptr )
+        if ( pDepthTarget != m_pCurrentDepthStencilView )
         {
-            m_pCurrentRenderTargets[i] = nullptr;
+            m_pCurrentDepthStencilView = pDepthTarget;
             m_bRenderTargetReqUpdate = true;
         }
-    }
-    if ( pDepthTarget != m_pCurrentDepthStencilView )
-    {
-        m_pCurrentDepthStencilView = pDepthTarget;
-        m_bRenderTargetReqUpdate = true;
     }
 }
 
@@ -893,10 +885,15 @@ void CD3D1XStateManager::FlushRenderTargets()
     auto context = GET_D3D_CONTEXT;
     if ( m_bRenderTargetReqUpdate )
     {
-        // SetRenderTargets leaves every slot at or past the requested count null in the cache, so binding the whole
-        // array releases the colour targets an earlier call left behind without a separate clearing pass. Clearing
-        // from a tracked index instead would retire targets the caller is still rendering to.
-        context->OMSetRenderTargets( D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, m_pCurrentRenderTargets, m_pCurrentDepthStencilView );
+        for ( int i = m_currentRenderTargetNeedsUpdate; i < 8; i++ )
+        {
+            m_pCurrentRenderTargets[i] = nullptr;
+        }
+        if ( m_currentRenderTargetNeedsUpdate == 0 )
+            context->OMSetRenderTargets( 0, nullptr, m_pCurrentDepthStencilView );
+        else
+            context->OMSetRenderTargets( 8, m_pCurrentRenderTargets, m_pCurrentDepthStencilView );
+        m_currentRenderTargetNeedsUpdate = 0;
         m_bRenderTargetReqUpdate = false;
     }
 }
@@ -980,8 +977,9 @@ void CD3D1XStateManager::InvalidateStateCache()
     if ( g_pRenderBuffersMgr )
         g_pRenderBuffersMgr->RebindConstantBuffers();
     FlushStates();
-    for ( int i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
+    for ( int i = 0; i < 8; i++ )
         m_pCurrentRenderTargets[i] = nullptr;
     m_pCurrentDepthStencilView       = nullptr;
+    m_currentRenderTargetNeedsUpdate = 0;
     m_bRenderTargetReqUpdate         = false;
 }
