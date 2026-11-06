@@ -326,7 +326,7 @@ void CD3DRenderer::BeginUpdate( RwCamera *camera )
         if ( camera->zBuffer != nullptr )
         {
             auto depthTex = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse );
-            g_pStateMgr->SetRenderTargets( 1, &rtrv, depthTex ? depthTex->GetDepthStencilView() : nullptr );
+            g_pStateMgr->SetRenderTargets( 1, &rtrv, depthTex->GetDepthStencilView() );
         }
         else
             g_pStateMgr->SetRenderTargets( 1, &rtrv, nullptr );
@@ -345,7 +345,7 @@ void CD3DRenderer::BeginUpdate( RwCamera *camera )
         if ( camera->zBuffer != nullptr )
         {
             auto depthTex = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse );
-            g_pStateMgr->SetRenderTargets( 0, nullptr, depthTex ? depthTex->GetDepthStencilView() : nullptr );
+            g_pStateMgr->SetRenderTargets( 0, nullptr, depthTex->GetDepthStencilView() );
         }
     }
     // Setup the viewport
@@ -382,28 +382,20 @@ void CD3DRenderer::Clear( RwCamera *camera, RwRGBA& color, RwInt32 flags )
     if ( flags&rwCAMERACLEARIMAGE && camera->frameBuffer )
     {
         auto rtTex = dynamic_cast<ID3D1XRenderTargetViewable*>( pd3dRTRaster->resourse );
-        ID3D11RenderTargetView* rtv = rtTex ? rtTex->GetRenderTargetView() : nullptr;
-        if ( rtv )
-        {
-            float clearColor[] = { color.red / 255.0f, color.green / 255.0f, color.blue / 255.0f, color.alpha / 255.0f };
-            m_pImmediateContext->ClearRenderTargetView( rtv, clearColor );
-        }
+        float clearColor[] = { color.red / 255.0f, color.green / 255.0f, color.blue / 255.0f, color.alpha / 255.0f };
+        m_pImmediateContext->ClearRenderTargetView( rtTex->GetRenderTargetView(), clearColor );
     }
     if ( ( flags&rwCAMERACLEARZ || flags & rwCAMERACLEARSTENCIL ) && camera->zBuffer )
     {
         auto depthTex = dynamic_cast<CD3D1XDepthStencilTexture*>( pd3dDepthRaster->resourse );
         // Clear to far-plane depth (0 for reversed Z, 1 for standard depth).
         const float farDepth = CRwD3D1XEngine::IsReversedZCamera( camera ) ? 0.0f : 1.0f;
-        ID3D11DepthStencilView* dsv = depthTex ? depthTex->GetDepthStencilView() : nullptr;
-        if ( dsv )
-        {
-            if ( !( flags&rwCAMERACLEARZ ) )
-                m_pImmediateContext->ClearDepthStencilView( dsv, D3D11_CLEAR_STENCIL, farDepth, 0 );
-            else if ( !( flags&rwCAMERACLEARSTENCIL ) )
-                m_pImmediateContext->ClearDepthStencilView( dsv, D3D11_CLEAR_DEPTH, farDepth, 0 );
-            else
-                m_pImmediateContext->ClearDepthStencilView( dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, farDepth, 0 );
-        }
+        if ( !( flags&rwCAMERACLEARZ ) )
+            m_pImmediateContext->ClearDepthStencilView( depthTex->GetDepthStencilView(), D3D11_CLEAR_STENCIL, farDepth, 0 );
+        else if ( !( flags&rwCAMERACLEARSTENCIL ) )
+            m_pImmediateContext->ClearDepthStencilView( depthTex->GetDepthStencilView(), D3D11_CLEAR_DEPTH, farDepth, 0 );
+        else
+            m_pImmediateContext->ClearDepthStencilView( depthTex->GetDepthStencilView(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, farDepth, 0 );
     }
 }
 

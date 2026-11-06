@@ -9,11 +9,6 @@
 // lets the others index past the arrays below.
 constexpr int kMaxShadowCascades = 4;
 
-// Slack added past the light box's own depth when the shadow camera's far clip is set. The caster culling planes
-// have to reach the same distance, so both the camera and the culling read this one value instead of repeating the
-// number and drifting apart.
-constexpr float kShadowFarClipMargin = 25.0f;
-
 struct CBShadows
 {
     RwMatrix ViewProj[kMaxShadowCascades];
