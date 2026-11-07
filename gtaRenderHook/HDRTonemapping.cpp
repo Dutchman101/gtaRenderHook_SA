@@ -6,6 +6,7 @@
 #include "RwRenderEngine.h"
 #include "RwD3D1XEngine.h"
 #include "D3DRenderer.h"
+#include "D3D1XBaseTexture.h"
 #include "D3D1XTexture.h"
 #include "FullscreenQuad.h"
 #include "D3D1XStateManager.h"
@@ -20,18 +21,29 @@ CHDRTonemapping::CHDRTonemapping() :CPostProcessEffect( "HDRTonemapping" )
 {
     m_pAdaptationRaster[0] = RwRasterCreate( 1, 1, 32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT16 );
     m_pAdaptationRaster[1] = RwRasterCreate( 1, 1, 32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT16 );
-    m_pLogAvg = new CD3D1XPixelShader( "shaders/HDRTonemapping.hlsl", "LogLuminancePS", &gTonemapSettings.m_ShaderDefineList );
+    // The adaptation pass reads one of these as the previous frame's luminance, so on the first frame it
+    // would read a raster nothing has written. The pass already maps a value at or below 0.01 to its
+    // neutral 0.5, so clearing to zero gives a defined first frame instead of whatever the driver left.
+    // Cleared through the view rather than by binding it: binding goes through the state manager, which
+    // remembers this 1x1 target and takes the viewport from it, and this constructor never flushes.
+    for ( int i = 0; i < 2; i++ )
+    {
+        auto *adaptationRT = dynamic_cast<ID3D1XRenderTargetViewable *>(
+            m_pAdaptationRaster[i] != nullptr ? GetD3D1XRaster( m_pAdaptationRaster[i] )->resourse : nullptr );
+        if ( adaptationRT != nullptr && adaptationRT->GetRenderTargetView() != nullptr )
+        {
+            const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            GET_D3D_CONTEXT->ClearRenderTargetView( adaptationRT->GetRenderTargetView(), clearColor );
+        }
+    }
     m_pTonemap = new CD3D1XPixelShader( "shaders/HDRTonemapping.hlsl", "TonemapPS", &gTonemapSettings.m_ShaderDefineList );
     m_pDownScale2x2_Lum = new CD3D1XPixelShader( "shaders/HDRTonemapping.hlsl", "DownScale2x2_LumPS", &gTonemapSettings.m_ShaderDefineList );
     m_pDownScale3x3 = new CD3D1XPixelShader( "shaders/HDRTonemapping.hlsl", "DownScale3x3PS", &gTonemapSettings.m_ShaderDefineList );
-    m_pDownScale3x3_BrightPass = new CD3D1XPixelShader( "shaders/HDRTonemapping.hlsl", "DownScale3x3_BrightPassPS", &gTonemapSettings.m_ShaderDefineList );
     m_pAdaptationPass = new CD3D1XPixelShader( "shaders/HDRTonemapping.hlsl", "AdaptationPassPS", &gTonemapSettings.m_ShaderDefineList );
 
-    gTonemapSettings.m_aShaderPointers.push_back( m_pLogAvg );
     gTonemapSettings.m_aShaderPointers.push_back( m_pTonemap );
     gTonemapSettings.m_aShaderPointers.push_back( m_pDownScale2x2_Lum );
     gTonemapSettings.m_aShaderPointers.push_back( m_pDownScale3x3 );
-    gTonemapSettings.m_aShaderPointers.push_back( m_pDownScale3x3_BrightPass );
     gTonemapSettings.m_aShaderPointers.push_back( m_pAdaptationPass );
 
     int nSampleLen = 1;
@@ -55,11 +67,9 @@ CHDRTonemapping::~CHDRTonemapping()
 
     RwRasterDestroy( m_pAdaptationRaster[0] );
     RwRasterDestroy( m_pAdaptationRaster[1] );
-    delete m_pLogAvg;
     delete m_pTonemap;
     delete m_pDownScale2x2_Lum;
     delete m_pDownScale3x3;
-    delete m_pDownScale3x3_BrightPass;
     delete m_pAdaptationPass;
 }
 

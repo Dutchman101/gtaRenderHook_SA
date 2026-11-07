@@ -57,12 +57,13 @@ void SettingsHolder::ReloadFile()
     {
         ResetSettings();
         SaveSettings();
+        // The defaults have to be read back as well as written. Every shader define list is built inside a
+        // block's Load, so a first run that stopped at SaveSettings would compile each settings-driven shader
+        // with none of its defines set and keep those defaults until the file was reloaded.
+        mSettingsFile.LoadFile( m_sSettingsFileName.c_str() );
     }
-    else
-    {
-        LoadSettings( mSettingsFile );
-        m_bInitialized = true;
-    }
+    LoadSettings( mSettingsFile );
+    m_bInitialized = true;
 }
 
 void SettingsHolder::ReloadShadersIfRequired()

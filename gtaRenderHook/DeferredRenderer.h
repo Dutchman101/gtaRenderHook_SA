@@ -37,6 +37,8 @@ public:
     CHDRTonemapping* m_pTonemapping;
     bool	m_bRequiresReloading = false;
 private:
+    void ClearFinalRasters();
+
     // 0: albedo, 1: normals and depth, 2: material params, 3: vertex radiance, 4: object motion vectors.
     static const int kGBufferTargets = 5;
     RwRaster*	m_aDeferredRasters[kGBufferTargets];
@@ -52,6 +54,8 @@ private:
     CD3D1XShader* m_pBlitPassPS;
     CD3D1XConstantBuffer<CBDeferredRendering>* m_pDeferredBuffer;
     UINT m_uiCurrentFinalRaster = 0;
+    // Set when a screen-size change has reallocated the final rasters, whose contents are undefined until written.
+    bool m_bFinalRasterHistoryInvalid = false;
 
 };
 extern CDeferredRenderer* g_pDeferredRenderer;

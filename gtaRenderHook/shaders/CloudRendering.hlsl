@@ -215,8 +215,12 @@ float3 ComputeCloudsAtDir( PS_QUAD_IN i, float3 LightDir, float3 ViewPos,
         return float3( 0, 0, 0 );
     if ( dot( WorldPos - end_pos, ViewDir ) < 0 )
         end_pos = WorldPos;
-    Length            = length( end_pos - start_pos );
-    float  StepLength = Length / (float)SunRaySampleCount;
+    // The caller's Length clamp is left unapplied on purpose: it is derived from RaymarchingDistance, which
+    // this pass reads from a constant buffer the cloud stage never binds, so the slab intersection below is
+    // the only real distance here. Writing the slab length back into Length shadowed the parameter and hid
+    // that gap, so the two are kept apart.
+    float  fSlabLength = length( end_pos - start_pos );
+    float  StepLength = fSlabLength / (float)SunRaySampleCount;
     float3 Step       = ViewDir * StepLength * Jitter;
     float3 CurrentPos = start_pos + Step;
 

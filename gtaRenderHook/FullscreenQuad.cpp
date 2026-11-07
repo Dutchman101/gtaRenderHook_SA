@@ -16,7 +16,6 @@ CD3D1XIndexBuffer* CFullscreenQuad::m_quadIB = nullptr;
 CD3D1XShader* CFullscreenQuad::m_quadVS = nullptr;
 CD3D1XShader* CFullscreenQuad::m_BlitPS = nullptr;
 CD3D1XVertexDeclaration* CFullscreenQuad::m_pVertexDecl = nullptr;
-RwRaster*	CFullscreenQuad::m_pBlitRaster = nullptr;
 
 void CFullscreenQuad::Init()
 {
@@ -47,8 +46,6 @@ void CFullscreenQuad::Init()
 
     initData.pSysMem = indices;
     m_quadIB = new CD3D1XIndexBuffer( 6, &initData );
-    m_pBlitRaster = RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
-
 }
 
 void CFullscreenQuad::Shutdown()
@@ -58,7 +55,6 @@ void CFullscreenQuad::Shutdown()
     delete m_quadIB;
     delete m_pVertexDecl;
     delete m_quadVS;
-    if ( m_pBlitRaster ) RwRasterDestroy( m_pBlitRaster );
 }
 
 void CFullscreenQuad::Draw()
@@ -84,15 +80,6 @@ void CFullscreenQuad::Draw()
     GET_D3D_RENDERER->DrawIndexed( 6, 0, 0 );
 }
 
-void CFullscreenQuad::Copy( RwRaster * from, RwRaster* zBuffer )
-{
-    g_pRwCustomEngine->SetRenderTargets( &m_pBlitRaster, nullptr, 1 );
-    g_pStateMgr->FlushRenderTargets();
-    g_pStateMgr->SetRaster( from );
-    m_BlitPS->Set();
-    Draw();
-}
-
 void CFullscreenQuad::Copy( RwRaster * from, RwRaster * zBuffer, RwRaster * to )
 {
     g_pRwCustomEngine->SetRenderTargets( &to, zBuffer, 1 );
@@ -100,15 +87,4 @@ void CFullscreenQuad::Copy( RwRaster * from, RwRaster * zBuffer, RwRaster * to )
     g_pStateMgr->SetRaster( from );
     m_BlitPS->Set();
     Draw();
-}
-
-void CFullscreenQuad::QueueTextureReload()
-{
-    CRwD3D1XEngine* dxEngine = (CRwD3D1XEngine*)g_pRwCustomEngine;
-    if ( dxEngine->m_bScreenSizeChanged )
-    {
-        m_pBlitRaster->width = RsGlobal.maximumWidth;
-        m_pBlitRaster->height = RsGlobal.maximumHeight;
-        dxEngine->m_pRastersToReload.push_back( m_pBlitRaster );
-    }
 }

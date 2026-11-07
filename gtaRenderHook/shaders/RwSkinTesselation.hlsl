@@ -106,13 +106,13 @@ VSout VS( VS_INPUT i )
 	outPos.xyz = mul(float4(i.inPosition.xyz,1.0f),BoneToLocal).xyz;
 	outPos.w = 1.0f;
 
-	float4 vPositionWS = mul(outPos, World);
+	float4 vPositionWS = mul(outPos, mWorld);
 	Out.vWorldPos = float3( vPositionWS.xyz );
 #if FEATURE_LEVEL < 0xb000
-	Out.vPosition = mul(mul( vPositionWS, View ), Projection);
+	Out.vPosition = mul(mul( vPositionWS, mView ), mProjection);
 #endif
 
-	Out.vNormal =  (mul(float4(mul(i.vInNormal,(float3x3)BoneToLocal),0.0f), World)).xyz;
+	Out.vNormal =  (mul(float4(mul(i.vInNormal,(float3x3)BoneToLocal),0.0f), mWorld)).xyz;
 	Out.vColor = i.vInColor;
 	
     return Out;
@@ -245,8 +245,8 @@ DS_OUTPUT DS( HS_CONSTANT_DATA_OUTPUT input, float3 BarycentricCoordinates : SV_
 	//vWorldPos+=output.vNormal*0.01f;
 	output.vWorldPos.xyz = vWorldPos.xyz;
     // Transform world position with viewprojection matrix
-	float4 outPos = mul( float4( vWorldPos.xyz, 1.0 ), View);
-    outPos = mul( outPos, Projection);
+	float4 outPos = mul( float4( vWorldPos.xyz, 1.0 ), mView);
+    outPos = mul( outPos, mProjection);
 	output.vWorldPos.w = outPos.z;
     output.vPosition = outPos;
         

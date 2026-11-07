@@ -242,8 +242,9 @@ void CTemporalAA::Render( RwRaster * input, RwRaster* output, RwRaster* gBuff1, 
     m_pTAABuffer->data.MBEdgeScale = gTAASettingsBlock.GetFloat( "MBEdgeScale" );
     m_pTAABuffer->data.MBCenterScale = gTAASettingsBlock.GetFloat( "MBCenterScale" );
     m_pTAABuffer->Update();
-    // Set last tonemap raster to render luminance.
-    g_pRwCustomEngine->SetRenderTargets( &m_pAccumRasters[m_nCurrentAccRaster], Scene.m_pRwCamera->zBuffer, 1 );
+    // No depth buffer is bound: the full-screen quad runs with depth testing off, so passing the scene
+    // z-buffer here only added a redundant depth-stencil bind to every frame.
+    g_pRwCustomEngine->SetRenderTargets( &m_pAccumRasters[m_nCurrentAccRaster], nullptr, 1 );
     g_pStateMgr->FlushRenderTargets();
     g_pStateMgr->SetConstantBufferPS( m_pTAABuffer, 9 );
     g_pStateMgr->SetRaster( input );
@@ -278,6 +279,10 @@ void CTemporalAA::QueueTextureReload()
         m_pAccumRasters[i]->height = RsGlobal.maximumHeight;
         dxEngine->m_pRastersToReload.push_back( m_pAccumRasters[i] );
     }
+    // The engine reallocates both accum rasters later in this frame, which drops whatever history they held,
+    // so the next Render would blend against an undefined previous frame. Marking it as the first frame makes
+    // Render substitute the current input for that history.
+    m_bFirstTimeRender = true;
 }
 
 void TAASettingsBlock::Load( const tinyxml2::XMLDocument & doc )

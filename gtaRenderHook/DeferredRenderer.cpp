@@ -4,6 +4,7 @@
 #include "AmbientOcclusion.h"
 #include "CloudRendering.h"
 #include "CubemapReflectionRenderer.h"
+#include "D3D1XBaseTexture.h"
 #include "D3D1XIm2DPipeline.h"
 #include "D3D1XShader.h"
 #include "D3D1XShaderDefines.h"
@@ -73,6 +74,7 @@ CDeferredRenderer::CDeferredRenderer()
     m_pFinalRasters[3] =
         RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32,
                         rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
+    ClearFinalRasters();
 
     m_pSunLightingPS =
         new CD3D1XPixelShader( "shaders/Deferred.hlsl", "SunLightingPS",
@@ -109,6 +111,26 @@ CDeferredRenderer::CDeferredRenderer()
     m_pTonemapping    = new CHDRTonemapping();
     m_pDeferredBuffer = new CD3D1XConstantBuffer<CBDeferredRendering>();
     m_pDeferredBuffer->SetDebugName( "DeferredCB" );
+}
+
+// The final rasters carry history between frames: [0] and [1] swap every frame and the reflection and final
+// passes sample whichever of them this frame did not write, so an uninitialised [0] or [1] is read before it
+// is ever written. Allocating or reallocating them leaves the new texture undefined, so both the constructor
+// and the first frame after a screen-size change have to clear all four.
+// Cleared through the view rather than by binding it: binding goes through the state manager, which remembers
+// the target and takes the viewport from it, and neither caller flushes that away.
+void CDeferredRenderer::ClearFinalRasters()
+{
+    for ( int i = 0; i < 4; i++ )
+    {
+        auto *finalRT = dynamic_cast<ID3D1XRenderTargetViewable *>(
+            m_pFinalRasters[i] != nullptr ? GetD3D1XRaster( m_pFinalRasters[i] )->resourse : nullptr );
+        if ( finalRT != nullptr && finalRT->GetRenderTargetView() != nullptr )
+        {
+            const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            GET_D3D_CONTEXT->ClearRenderTargetView( finalRT->GetRenderTargetView(), clearColor );
+        }
+    }
 }
 
 CDeferredRenderer::~CDeferredRenderer()
@@ -160,6 +182,11 @@ void CDeferredRenderer::RenderToGBuffer( void ( *renderCB )() )
 
 void CDeferredRenderer::RenderOutput()
 {
+    if ( m_bFinalRasterHistoryInvalid )
+    {
+        ClearFinalRasters();
+        m_bFinalRasterHistoryInvalid = false;
+    }
 
     // g_pDebug->printMsg("Start of deffered output.");
     m_pDeferredBuffer->data.SSRMaxIterations =
@@ -260,7 +287,11 @@ void CDeferredRenderer::RenderOutput()
     for ( auto i = 0; i < 7; i++ )
         g_pStateMgr->SetRaster( nullptr, i );
 
-    // Restore texture
+    // Restore texture.
+    // The forward pass that runs next inherits this target set: it draws with the depth test enabled and binds
+    // no target or depth view of its own, so the scene depth has to be bound here even though the blit below
+    // draws with the test off. Without it the water, the alpha object lists and the effects have no depth to
+    // be occluded by, and they draw over the whole frame instead of behind the opaque geometry.
     g_pRwCustomEngine->SetRenderTargets(
         &m_pFinalRasters[m_uiCurrentFinalRaster], Scene.m_pRwCamera->zBuffer,
         1 );
@@ -283,8 +314,7 @@ void CDeferredRenderer::RenderTonemappedOutput()
 {
     auto src_raster  = m_pFinalRasters[3];
     auto dest_raster = m_pFinalRasters[2];
-    CFullscreenQuad::Copy( m_pFinalRasters[m_uiCurrentFinalRaster],
-                           Scene.m_pRwCamera->zBuffer, src_raster );
+    CFullscreenQuad::Copy( m_pFinalRasters[m_uiCurrentFinalRaster], nullptr, src_raster );
 
     if ( gVolumetricLightingSettings.GetToggleField( "EnableVolumetricLighting" ) )
     {
@@ -301,12 +331,14 @@ void CDeferredRenderer::RenderTonemappedOutput()
     }
     if ( gTonemapSettings.GetToggleField( "EnableTonemap" ) )
     {
-        m_pTonemapping->Render( src_raster, dest_raster,
-                                Scene.m_pRwCamera->zBuffer );
+        // The pass draws one full-screen quad and samples no depth, so it binds none. Depth test and write
+        // are both off across this chain, so the bind changed nothing; dropping it stops the pass from
+        // depending on that ambient render state staying off.
+        m_pTonemapping->Render( src_raster, dest_raster, nullptr );
         std::swap( src_raster, dest_raster );
     }
 
-    CFullscreenQuad::Copy( src_raster, Scene.m_pRwCamera->zBuffer,
+    CFullscreenQuad::Copy( src_raster, nullptr,
                            Scene.m_pRwCamera->frameBuffer );
 
     m_uiCurrentFinalRaster = 1 - m_uiCurrentFinalRaster;
@@ -366,6 +398,9 @@ void CDeferredRenderer::QueueTextureReload()
             m_pFinalRasters[i]->height = RsGlobal.maximumHeight;
             dxEngine->m_pRastersToReload.push_back( m_pFinalRasters[i] );
         }
+        // The engine reallocates these later in the frame, which replaces their textures, so the history this
+        // pass samples is gone and the first frame after the reallocation has to rebuild it.
+        m_bFinalRasterHistoryInvalid = true;
     }
 }
 

@@ -26,14 +26,9 @@ float MicrofacetNDF_GGX(in float3 vNormal, in float3 vHalfWay, in float fRoughne
 
 	float fCosAlphaSqr = saturate(dot(vNormal, vHalfWay));// Alpha is angle between normal and half-way vector
 	//fCosAlphaSqr *= fCosAlphaSqr;		// need to check if can be optimized to use less instructions
-	float fDiv = ((fRoughnessSqr - 1)*fCosAlphaSqr + 1);
-	float fNDCoeff = fRoughnessSqr;
-	fNDCoeff /= PI*(fDiv*fDiv+ 1e-7f);
 
     half d = (fCosAlphaSqr * fRoughnessSqr - fCosAlphaSqr) * fCosAlphaSqr + 1.0f; // 2 mad
     return fRoughnessSqr / (d * d + 1e-7f);
-	//return fNDCoeff;
-	//float 
 }
 // Microfacet normal geometric shadowing function(Schlick-Beckmann)
 float MicrofacetGeometricShadow(in float3 vNormal,in float3 vViewDir,in float fRoughness){
@@ -132,27 +127,15 @@ float GGX_Distribution(float cosThetaNH, float alpha)
 }
 
 void CalculateSpecularTerm(in float3 vNormal,in float3 vLightDir,in float3 vViewDir,in float fRoughness,out float fSpecularTerm){
-	float3 vHalfWay = normalize(vLightDir + vViewDir);
-	float fresnelTerm = MicrofacetFresnel(vLightDir, vHalfWay, fRoughness);
-    float roug_sqr = fRoughness * fRoughness;
-    float G = GGX_PartialGeometry(dot(vNormal, vViewDir), roug_sqr) * GGX_PartialGeometry(dot(vNormal, vLightDir), roug_sqr);
-    float D = GGX_Distribution(dot(vNormal, vHalfWay), roug_sqr);
-    float ndfTerm = MicrofacetNDF_GGX(vNormal, vHalfWay, fRoughness*fRoughness);
-	float ndl = saturate(dot(vNormal, vLightDir));
-    float ndv = saturate(dot(vNormal, vViewDir));
-    float visibilityTerm = SmithJointGGXVisibilityTerm(ndl, ndv, fRoughness * fRoughness);
-    /*if (ndv <= 0.0 || ndl <= 0.0)
-    {
-        fSpecularTerm = 0.0f;
-        return;
-    }*/
-	//MicrofacetGeometricShadow(vNormal, vViewDir, fRoughness);
+    // The two paths share no intermediate value: the PBR path needs only the half vector and the NDF, the
+    // Phong path only the reflection vector. Computing the other path's terms costs per-pixel work whose
+    // result is discarded, so each arm below builds just what it returns.
 #if USE_PBR==1
+    float3 vHalfWay = normalize(vLightDir + vViewDir);
+    float ndfTerm = MicrofacetNDF_GGX(vNormal, vHalfWay, fRoughness*fRoughness);
     fSpecularTerm = ndfTerm * 0.25f;
 #else
     fSpecularTerm = PhongSpecular(vNormal, vLightDir, -vViewDir, fRoughness)*4.0f;
 #endif
-    //
-    //ndfTerm * fresnelTerm;
 }
 #endif

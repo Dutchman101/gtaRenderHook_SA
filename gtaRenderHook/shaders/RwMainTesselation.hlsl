@@ -278,7 +278,7 @@ DS_OUTPUT DS( HS_CONSTANT_DATA_OUTPUT input, float3 BarycentricCoordinates : SV_
                       BarycentricCoordinates.x * TrianglePatch[1].vColor + 
                       BarycentricCoordinates.y * TrianglePatch[2].vColor;
 	float fHeightMapMIPLevel = clamp( ( distance( vWorldPos, g_vEye ) - 100.0f ) / 100.0f, 3.0f, 6.0f);
-	float4 vNormalHeight = ((txDiffuse.SampleLevel( samLinear, output.texCoord, 0 )-0.5f) * max(10, 0)) + 0.5f;
+	float4 vNormalHeight = ((txDiffuse.SampleLevel( samLinear, output.texCoord, fHeightMapMIPLevel )-0.5f) * max(10, 0)) + 0.5f;
     //output.vNormal=;
     // Displace vertex along normal
     vWorldPos += (normalize(output.vNormal*(1.0f-vNormalHeight.xyz)))*0.05f;

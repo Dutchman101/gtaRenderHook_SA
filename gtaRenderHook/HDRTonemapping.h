@@ -23,12 +23,10 @@ public:
     ~CHDRTonemapping();
     virtual void Render( RwRaster* input, RwRaster* output, RwRaster* zbuffer );
 private:
-    CD3D1XShader* m_pLogAvg;
     CD3D1XShader* m_pTonemap;
     CD3D1XShader* m_pDownScale2x2_Lum;
     CD3D1XShader* m_pDownScale3x3;
     CD3D1XShader* m_pAdaptationPass;
-    CD3D1XShader* m_pDownScale3x3_BrightPass;
     RwRaster*	m_pAdaptationRaster[2];
     RwRaster *    m_pToneMapRaster[NUM_TONEMAP_TEXTURES]{};
     UINT m_nCurrentAdaptationRaster = 0;

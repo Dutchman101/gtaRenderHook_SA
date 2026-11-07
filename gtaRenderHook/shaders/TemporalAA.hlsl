@@ -17,24 +17,6 @@ struct PS_QUAD_IN
     float4 vTexCoord : TEXCOORD0;
 };
 
-float3 RGB2YCbCr(float3 rgb)
-{
-    float3 RGB2Y = { 0.29900, 0.58700, 0.11400 };
-    float3 RGB2Cb = { -0.16874, -0.33126, 0.50000 };
-    float3 RGB2Cr = { 0.50000, -0.41869, -0.081 };
-
-    return float3(dot(rgb, RGB2Y), dot(rgb, RGB2Cb), dot(rgb, RGB2Cr));
-}
-
-float3 YCbCr2RGB(float3 ycc)
-{
-    float3 YCbCr2R = { 1.0, 0.00000, 1.40200 };
-    float3 YCbCr2G = { 1.0, -0.34414, -0.71414 };
-    float3 YCbCr2B = { 1.0, 1.77200, 1.40200 };
-
-    return float3(dot(ycc, YCbCr2R), dot(ycc, YCbCr2G), dot(ycc, YCbCr2B));
-}
-
 float4 TAA_PS(PS_QUAD_IN i) : SV_TARGET
 {
     float2 Offset = float2(1.0f / fScreenWidth, 1.0f / fScreenHeight);
@@ -59,7 +41,6 @@ float4 TAA_PS(PS_QUAD_IN i) : SV_TARGET
     float coeff = (PrevTexCoords.x > 1.0 || PrevTexCoords.y > 1.0 
                 || PrevTexCoords.x < 0.0 || PrevTexCoords.y < 0.0) ? 0.0 : TAABlendFactor;
     float4 AccamulatedColor = txAccumBuffer.Sample(samLinear, PrevTexCoords) ;
-    float4 MatParams = txGB2.Sample(samLinear, i.vTexCoord.xy);
     if (coeff > 0.0)
     {
         float3 minRGB = ScreenColor.rgb;

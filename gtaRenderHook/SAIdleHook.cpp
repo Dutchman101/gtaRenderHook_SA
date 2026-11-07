@@ -100,7 +100,6 @@ void CSAIdleHook::Idle( void *Data )
     CVolumetricLighting::QueueTextureReload();
     CCloudRendering::QueueTextureReload();
     CAmbientOcclusion::QueueTextureReload();
-    CFullscreenQuad::QueueTextureReload();
     CTemporalAA::QueueTextureReload();
     // TODO: move to RwD3D1XEngine
     CRwD3D1XEngine* dxEngine = (CRwD3D1XEngine*)g_pRwCustomEngine;
@@ -130,7 +129,6 @@ void CSAIdleHook::Idle( void *Data )
         CVolumetricLighting::QueueTextureReload();
         CCloudRendering::QueueTextureReload();
         CAmbientOcclusion::QueueTextureReload();
-        CFullscreenQuad::QueueTextureReload();
         CTemporalAA::QueueTextureReload();
         dxEngine->ReloadTextures();
         dxEngine->m_bScreenSizeChanged = false;

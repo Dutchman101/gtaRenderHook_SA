@@ -31,44 +31,8 @@ float LogLuminancePS(PS_QUAD_IN i) : SV_Target
     return LogLum;
 }
 
-float GaussianDistribution(float x, float y, float rho)
-{
-    float g = 1.0f / sqrt(2.0f * 3.14f * rho * rho);
-    g *= exp(-(x * x + y * y) / (2 * rho * rho));
-
-    return g;
-}
-
 float4 TonemapPS(PS_QUAD_IN i) : SV_Target
 {
-    float2 g_avSampleOffsets[15];
-    float4 g_avSampleWeights[15];
-    float tu = 1.0f / (float) fScreenWidth;
-    float fDeviation = 3.0f,
-          fMultiplier = 1.25f;
-
-    // Fill the center texel
-    float weight = 1.0f * GaussianDistribution(0, 0, fDeviation);
-    g_avSampleWeights[7] = float4(weight, weight, weight, 1.0f);
-
-    g_avSampleOffsets[7] = 0.0f;
-
-    // Fill one side
-    for (int k = 1; k < 8; k++)
-    {
-        weight = fMultiplier * GaussianDistribution((float) k, 0, fDeviation);
-        g_avSampleOffsets[7 - k] = -k * tu;
-
-        g_avSampleWeights[7 - k] = float4(weight, weight, weight, 1.0f);
-    }
-
-    // Copy to the other side
-    for (int j = 8; j < 15; j++)
-    {
-        g_avSampleWeights[j] = g_avSampleWeights[14 - j];
-        g_avSampleOffsets[j] = -g_avSampleOffsets[14 - j];
-    }
-
 	float AvgLogLum = txAvgLogLum.Load(int3(0, 0, 0)).r;
     AvgLogLum = (AvgLogLum <= 0.01f || isnan(AvgLogLum)) ? 0.5f : clamp(AvgLogLum, 0.35f, 1.0f);
     float3 ScreenColor = txInputRaster.Sample(samLinear, i.vTexCoord.xy).rgb;
@@ -77,24 +41,6 @@ float4 TonemapPS(PS_QUAD_IN i) : SV_Target
     ScreenColor *= fMiddleGray / (AvgLogLum + 0.001f);
     ScreenColor *= (1.0f + ScreenColor / fLumWhite);
     ScreenColor /= (1.0f + ScreenColor);
-
-    float4 vSample = 0.0f;
-    float4 vColor = 0.0f;
-    float2 vSamplePosition;
-    
-    for (int iSample = 0; iSample < 15; iSample++)
-    {
-        // Sample from adjacent points
-        vSamplePosition = i.vTexCoord.xy + g_avSampleOffsets[iSample];
-        vColor = txInputRaster.Sample(samLinear, vSamplePosition);
-        vColor *= fMiddleGray / (AvgLogLum + 0.001f);
-        vColor *= (1.0f + vColor / fLumWhite);
-        vColor /= (1.0f + vColor);
-
-        vSample += g_avSampleWeights[iSample] * vColor;
-    }
-
-    //ScreenColor += vSample;
 
 #if USE_GTA_CC==1
     // here i use standard gta color grading colors to do some nice(or bad depends on what you think) color grading
@@ -150,7 +96,7 @@ float4 DownScale3x3PS(PS_QUAD_IN i) : SV_TARGET
         for (int x = -1; x <= 1; x++)
         {
             // Compute sum of color values
-            vColor = txInputRaster.Sample(samLinear, i.vTexCoord.xy, int2(x, y));
+            vColor = txInputRaster.SampleLevel(samLinear, i.vTexCoord.xy, 0, int2(x, y));
                         
             Avg += vColor.r;
         }
