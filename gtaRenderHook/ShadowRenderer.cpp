@@ -228,6 +228,12 @@ bool CShadowRenderer::AllCascadesUpdated() const
 // depth test set to always pass. ClearDepthStencilView can only clear the whole atlas.
 void CShadowRenderer::ClearCascade( int cascade )
 {
+    // Every state this pass changes is captured first and put back afterwards, because only stale cascades reach it:
+    // the fresh ones return before the clear, so anything left enabled here stays enabled for the rest of the frame
+    // and is inherited by the forward pass that draws after it.
+    const BOOL oldDepthEnable = g_pStateMgr->GetDepthEnable();
+    const bool oldZWriteEnable = g_pStateMgr->GetZWriteEnable();
+    const D3D11_COMPARISON_FUNC oldDepthFunc = g_pStateMgr->GetDepthFunc();
     g_pStateMgr->SetDepthEnable( true );
     g_pStateMgr->SetZWriteEnable( true );
     g_pStateMgr->SetDepthFunc( D3D11_COMPARISON_ALWAYS );
@@ -237,7 +243,9 @@ void CShadowRenderer::ClearCascade( int cascade )
     g_pStateMgr->SetAlphaBlendEnable( FALSE );
     m_pDepthClearPS->Set();
     CFullscreenQuad::Draw();
-    g_pStateMgr->SetDepthFunc( D3D11_COMPARISON_LESS_EQUAL );
+    g_pStateMgr->SetDepthFunc( oldDepthFunc );
+    g_pStateMgr->SetZWriteEnable( oldZWriteEnable );
+    g_pStateMgr->SetDepthEnable( oldDepthEnable );
     g_pStateMgr->SetCullMode( oldCullMode );
     g_pStateMgr->SetAlphaBlendEnable( oldBlendState );
 }

@@ -170,7 +170,7 @@ void CCubemapReflectionRenderer::RenderOneFace(
         GetD3D1XRaster( m_pReflCamera->zBuffer )->resourse );
     ID3D11RenderTargetView *aRTViews[1] = {g_apEnvMapOneRTV[id]};
     context->OMSetRenderTargets( 1, aRTViews,
-                                 depthBuffer->GetDepthStencilView() );
+                                 depthBuffer ? depthBuffer->GetDepthStencilView() : nullptr );
     D3D11_VIEWPORT vp{};
     vp.Width    = (FLOAT)m_nCubemapSize;
     vp.Height   = (FLOAT)m_nCubemapSize;

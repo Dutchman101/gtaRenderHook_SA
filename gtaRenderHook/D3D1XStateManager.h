@@ -276,6 +276,12 @@ public:
     */
     bool GetZWriteEnable() { return m_depthStencilDesc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ALL; }
     /*!
+        Returns the depth comparison function that was requested, before reversed Z mirroring. SetDepthFunc keeps
+        that value in m_depthFunc and mirrors it into the description, so a caller putting the function back has to
+        restore this one rather than the description's, which would be mirrored a second time under reversed Z.
+    */
+    D3D11_COMPARISON_FUNC GetDepthFunc() { return m_depthFunc; }
+    /*!
         Returns true if depth state has been changed.
     */
     bool IsDepthDescRequiresUpdate();

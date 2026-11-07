@@ -371,6 +371,11 @@ void CD3DRenderer::EndUpdate( RwCamera *camera )
     {
         ID3D11UnorderedAccessView* uavs = nullptr;
         m_pImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews( 0, { nullptr }, nullptr, 2, 1, &uavs, nullptr );
+        // That call leaves the device with no colour target and no depth view bound, so the state manager is told
+        // the same thing. Only the octree clip maps carry the flag that reaches this branch, and leaving the cache
+        // on the camera's target would let a later SetRenderTargets for those same pointers compare equal, raise
+        // no update, and draw into whatever the device really holds.
+        g_pStateMgr->SetRenderTargets( 0, nullptr, nullptr );
     }
 }
 

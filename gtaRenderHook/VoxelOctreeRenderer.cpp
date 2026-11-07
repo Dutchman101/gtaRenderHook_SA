@@ -133,9 +133,11 @@ void CVoxelOctreeRenderer::RenderToVoxelOctree( void( *render )( ), const int &l
     RwCameraClear( m_pVoxelCamera, gColourTop, rwCAMERACLEARZ );
 
     RwCameraBeginUpdate( m_pVoxelCamera );
+    // Captured and put back, so a caller that entered this pass with the depth test off still has it off afterwards.
+    const BOOL oldDepthEnable = g_pStateMgr->GetDepthEnable();
     g_pRwCustomEngine->RenderStateSet( rwRENDERSTATEZTESTENABLE, 0 );
     render();
-    g_pRwCustomEngine->RenderStateSet( rwRENDERSTATEZTESTENABLE, 1 );
+    g_pStateMgr->SetDepthEnable( oldDepthEnable );
     RwCameraEndUpdate( m_pVoxelCamera );
 
     ID3D11UnorderedAccessView* uavs = nullptr;
