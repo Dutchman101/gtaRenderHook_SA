@@ -38,6 +38,14 @@ public:
     ID3DBlob* getBlob() { return m_pBlob; }
     bool IsValid() const { return m_pShaderDC != nullptr; }
     static void InvalidateStateCache();
+    /*!
+        Reports whether a shader source file defines the given entry point.
+
+        Presets may ship their own copy of a shader that omits an entry point this build expects, and a
+        missing entry point cannot be compiled at all. Comments are ignored, so an entry point that is
+        only named inside a comment does not count as defined.
+    */
+    static bool SourceDefinesEntryPoint( const std::string &shaderPath, const std::string &entryPoint );
 public:
     /*!
         Compiles shader with custom entry point and shader model

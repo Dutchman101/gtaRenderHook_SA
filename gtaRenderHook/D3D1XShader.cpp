@@ -54,6 +54,39 @@ void CD3D1XShader::ReSet() {}
 
 void CD3D1XShader::Reload( CD3D1XShaderDefineList *localShaderDefineList ) {}
 
+// A missing entry point cannot be compiled, so a pipeline that treats an entry point as optional probes the
+// source before creating the shader and keeps its base shader for that stage. Comment text is dropped first:
+// a preset that ships its own copy of a shader may leave the entry point named in a comment, and a name that
+// only survives in a comment still fails to compile.
+bool CD3D1XShader::SourceDefinesEntryPoint( const std::string &shaderPath, const std::string &entryPoint )
+{
+    std::ifstream shaderFile( shaderPath );
+    const std::string shaderText( ( std::istreambuf_iterator<char>( shaderFile ) ), std::istreambuf_iterator<char>() );
+    std::string strippedText;
+    strippedText.reserve( shaderText.size() );
+    for ( size_t idx = 0; idx < shaderText.size(); )
+    {
+        if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '/' )
+        {
+            while ( idx < shaderText.size() && shaderText[idx] != '\n' )
+                ++idx;
+        }
+        else if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '*' )
+        {
+            idx += 2;
+            while ( idx + 1 < shaderText.size() && !( shaderText[idx] == '*' && shaderText[idx + 1] == '/' ) )
+                ++idx;
+            if ( idx + 1 < shaderText.size() )
+                idx += 2;
+        }
+        else
+        {
+            strippedText.push_back( shaderText[idx++] );
+        }
+    }
+    return strippedText.find( entryPoint ) != std::string::npos;
+}
+
 // Compiled shaders are kept in shaders/cache, keyed by a hash of the preprocessed source (includes and defines
 // resolved), entry point, target and flags: a large shader takes fxc up to 20 s, every launch, and they rarely change.
 static uint64_t HashShaderKey( const char *data, size_t size, uint64_t hash = 14695981039346656037ull )

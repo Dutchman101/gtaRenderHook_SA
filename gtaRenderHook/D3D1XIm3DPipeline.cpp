@@ -9,8 +9,6 @@
 #include "RwD3D1XEngine.h"
 #include "D3D1XEnumParser.h"
 #include "DeferredRenderer.h"
-#include <fstream>
-#include <iterator>
 
 // Update takes the upload size as an int, so a batch whose byte count does not fit that parameter
 // cannot be uploaded at all. Dividing the limit by the element size yields the largest count that
@@ -38,31 +36,9 @@ CD3D1XIm3DPipeline::CD3D1XIm3DPipeline() :
     m_pVertexBuffer->SetDebugName( "Im3D_DynamicVB" );
     m_pIndexBuffer->SetDebugName( "Im3D_DynamicIB" );
     const std::string shaderPath = "shaders/" + m_sPipeName + ".hlsl";
-    std::ifstream shaderFile( shaderPath );
-    const std::string shaderText( ( std::istreambuf_iterator<char>( shaderFile ) ), std::istreambuf_iterator<char>() );
-    std::string strippedText;
-    strippedText.reserve( shaderText.size() );
-    for ( size_t idx = 0; idx < shaderText.size(); )
-    {
-        if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '/' )
-        {
-            while ( idx < shaderText.size() && shaderText[idx] != '\n' )
-                ++idx;
-        }
-        else if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '*' )
-        {
-            idx += 2;
-            while ( idx + 1 < shaderText.size() && !( shaderText[idx] == '*' && shaderText[idx + 1] == '/' ) )
-                ++idx;
-            if ( idx + 1 < shaderText.size() )
-                idx += 2;
-        }
-        else
-        {
-            strippedText.push_back( shaderText[idx++] );
-        }
-    }
-    if ( strippedText.find( "DeferredPS" ) != std::string::npos )
+    // Presets may ship their own copy of the immediate-mode shader without the deferred pass; a missing
+    // entry point cannot be compiled, so that stage falls back to the pipeline's base pixel shader.
+    if ( CD3D1XShader::SourceDefinesEntryPoint( shaderPath, "DeferredPS" ) )
         m_pDeferredPS = new CD3D1XPixelShader( shaderPath, "DeferredPS" );
 }
 
@@ -169,10 +145,15 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
         m_pVS->Set();
         // The game draws smashed objects (e.g. a knocked-over lamppost) in immediate mode from the G-buffer pass. There every
         // G-buffer target has to be written and nothing blended, or the pieces get the normals and depth of what is behind.
+        // The disable covers the whole stage, not just the branch that binds the deferred shader: a shader without that
+        // entry point falls back to the base one and still writes the G-buffer pass, so it needs the same disable.
         const BOOL oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
-        if ( m_uiDeferredStage == 1 && m_pDeferredPS && m_pDeferredPS->IsValid() )
+        if ( m_uiDeferredStage == 1 )
         {
-            m_pDeferredPS->Set();
+            if ( m_pDeferredPS && m_pDeferredPS->IsValid() )
+                m_pDeferredPS->Set();
+            else
+                m_pPS->Set();
             g_pStateMgr->SetAlphaBlendEnable( FALSE );
         }
         else

@@ -142,7 +142,7 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
     }
     else
         m_pVS->Set();
-    if ( m_uiDeferredStage == 1 )
+    if ( m_uiDeferredStage == 1 && m_pDeferredPS && m_pDeferredPS->IsValid() )
         m_pDeferredPS->Set();
     else if ( m_uiDeferredStage == 2 )
         m_pShadowPS->Set();

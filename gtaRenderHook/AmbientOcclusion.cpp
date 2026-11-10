@@ -9,8 +9,6 @@
 #include <game_sa\CScene.h>
 #include "FullscreenQuad.h"
 #include "D3D1X2DRenderTarget.h"
-#include <fstream>
-#include <iterator>
 AmbientOcclusionSettingsBlock gAmbientOcclusionSettings;
 RwRaster*	 CAmbientOcclusion::m_pAORaser = nullptr;
 RwRaster*	 CAmbientOcclusion::m_pAOTempRaster = nullptr;
@@ -27,31 +25,7 @@ void CAmbientOcclusion::Init()
     m_pAmbientOcclusionPS = new CD3D1XPixelShader( "shaders/AmbientOcclusion.hlsl", "AmbientOcclusionPS", &gAmbientOcclusionSettings.m_ShaderDefineList );
     gAmbientOcclusionSettings.m_aShaderPointers.push_back( m_pAmbientOcclusionPS );
     // Presets may ship their own AmbientOcclusion.hlsl without the denoiser; a missing entry point can't be compiled.
-    std::ifstream shaderFile( "shaders/AmbientOcclusion.hlsl" );
-    const std::string shaderText( ( std::istreambuf_iterator<char>( shaderFile ) ), std::istreambuf_iterator<char>() );
-    std::string strippedText;
-    strippedText.reserve( shaderText.size() );
-    for ( size_t idx = 0; idx < shaderText.size(); )
-    {
-        if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '/' )
-        {
-            while ( idx < shaderText.size() && shaderText[idx] != '\n' )
-                ++idx;
-        }
-        else if ( idx + 1 < shaderText.size() && shaderText[idx] == '/' && shaderText[idx + 1] == '*' )
-        {
-            idx += 2;
-            while ( idx + 1 < shaderText.size() && !( shaderText[idx] == '*' && shaderText[idx + 1] == '/' ) )
-                ++idx;
-            if ( idx + 1 < shaderText.size() )
-                idx += 2;
-        }
-        else
-        {
-            strippedText.push_back( shaderText[idx++] );
-        }
-    }
-    if ( strippedText.find( "AODenoisePS" ) != std::string::npos )
+    if ( CD3D1XShader::SourceDefinesEntryPoint( "shaders/AmbientOcclusion.hlsl", "AODenoisePS" ) )
     {
         m_pDenoisePS = new CD3D1XPixelShader( "shaders/AmbientOcclusion.hlsl", "AODenoisePS", &gAmbientOcclusionSettings.m_ShaderDefineList );
         gAmbientOcclusionSettings.m_aShaderPointers.push_back( m_pDenoisePS );

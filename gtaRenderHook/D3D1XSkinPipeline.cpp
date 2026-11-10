@@ -132,7 +132,7 @@ void CD3D1XSkinPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8 t
     g_pStateMgr->SetPrimitiveTopology( CD3D1XEnumParser::ConvertPrimTopology( (RwPrimitiveType)entryData->header.primType ) );
     m_pVS->Set();
     // TODO: replace checks with different pipelines or pipeline variants or something like that
-    if ( m_uiDeferredStage == 1 )
+    if ( m_uiDeferredStage == 1 && m_pDeferredPS && m_pDeferredPS->IsValid() )
         m_pDeferredPS->Set();
     else if ( m_uiDeferredStage == 2 )
         m_pShadowPS->Set();
