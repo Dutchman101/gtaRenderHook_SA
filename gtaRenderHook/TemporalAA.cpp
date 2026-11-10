@@ -11,6 +11,7 @@
 #include <game_sa\CScene.h>
 #include <game_sa\CCamera.h>
 #include "RenderHookAPI.h"
+#include "CDebug.h"
 CD3D1XShader *CTemporalAA::m_pTemporalAA = nullptr;
 RwRaster *CTemporalAA::m_pAccumRasters[2] = { nullptr, nullptr };
 RwV3d CTemporalAA::m_vPrevCamPos = { 0,0,0 };
@@ -105,47 +106,73 @@ static bool RunExternalTAA( RwRaster *input, RwRaster *output, RwRaster *gBuff1,
 }
 void CTemporalAA::Init()
 {
-    m_pAccumRasters[0] = RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
-    m_pAccumRasters[1] = RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
-    m_pTemporalAA = new CD3D1XPixelShader( "shaders/TemporalAA.hlsl", "TAA_PS" );
-    m_pTAABuffer = new CD3D1XConstantBuffer<CBTemporalAA>();
-    m_pTAABuffer->SetDebugName( "TemporalAACB" );
+    // A second start-up would otherwise overwrite the handles a previous one owns and leak them, so it starts from empty.
+    Shutdown();
+    CreateAccumRasters();
+    // Fresh accumulation rasters hold no history, so the next Render has to substitute the current input for it.
+    m_bFirstTimeRender = true;
+    // The stored view-projection still describes the frame from before the restart, so without this the next
+    // JitterProjMatrix reports the camera's whole jump as object motion instead of seeding it from this frame.
+    g_hasPrevViewProj = false;
+    // Cleared as a whole first, because the diagonal writes below touch only those four entries and a start-up after
+    // a rendered frame would otherwise hand Render the previous camera's inverse view with only its diagonal replaced.
+    // All three are set before the two constructions below, because the second of them is what makes CanAccumulate
+    // report that the pass can run, and Render reads this history from that point on.
+    m_mPrevView = {};
     m_mPrevView.m[0].x = 1.0f;
     m_mPrevView.m[1].y = 1.0f;
     m_mPrevView.m[2].z = 1.0f;
     m_mPrevView.m[3].w = 1.0f;
+    m_pTemporalAA = new CD3D1XPixelShader( "shaders/TemporalAA.hlsl", "TAA_PS" );
+    m_pTAABuffer = new CD3D1XConstantBuffer<CBTemporalAA>();
+    m_pTAABuffer->SetDebugName( "TemporalAACB" );
 }
 
 void CTemporalAA::Shutdown()
 {
-    RwRasterDestroy( m_pAccumRasters[0] );
-    RwRasterDestroy( m_pAccumRasters[1] );
+    // Released and cleared together, so a repeated shutdown does not release them twice and a reload after this does
+    // not read a released raster.
+    for ( auto &raster : m_pAccumRasters )
+    {
+        if ( raster != nullptr )
+        {
+            RwRasterDestroy( raster );
+            raster = nullptr;
+        }
+    }
     delete m_pTemporalAA;
+    m_pTemporalAA = nullptr;
     delete m_pTAABuffer;
+    m_pTAABuffer = nullptr;
+}
+
+// Fills only the rasters that are missing, so a start-up that could not create them and a reload retry cannot disagree
+// about the size, the format or the diagnostic, and neither overwrites a handle that is already live.
+void CTemporalAA::CreateAccumRasters()
+{
+    for ( auto &raster : m_pAccumRasters )
+    {
+        if ( raster == nullptr )
+            raster = RwRasterCreate( RsGlobal.maximumWidth, RsGlobal.maximumHeight, 32, rwRASTERTYPECAMERATEXTURE | rwRASTERFORMAT1555 );
+    }
+    if ( m_pAccumRasters[0] == nullptr || m_pAccumRasters[1] == nullptr )
+        g_pDebug->printError( "Temporal AA accumulation rasters are incomplete: the built-in TAA pass is disabled." );
+}
+
+// Render and JitterProjMatrix both read this, so the two cannot disagree about whether a frame can be accumulated.
+bool CTemporalAA::CanAccumulate()
+{
+    return m_pTemporalAA != nullptr && m_pTAABuffer != nullptr &&
+           m_pAccumRasters[0] != nullptr && m_pAccumRasters[1] != nullptr;
 }
 
 void CTemporalAA::JitterProjMatrix()
 {
-    float rcx = 1.0f / RsGlobal.maximumWidth;
-    float rcy = 1.0f / RsGlobal.maximumHeight;
+    // No display mode exists before the engine establishes one, and the reciprocal of a zero size is infinite, which
+    // reached the projection as a non-finite offset. Zero leaves that frame unjittered and touches nothing else.
+    float rcx = RsGlobal.maximumWidth >= 2 ? 1.0f / RsGlobal.maximumWidth : 0.0f;
+    float rcy = RsGlobal.maximumHeight >= 2 ? 1.0f / RsGlobal.maximumHeight : 0.0f;
     float Scale = gTAASettingsBlock.GetFloat( "SubPixelScale" );
-    float jittermatrixX[11] = {
-        // halton seq
-        0.0f, 0.5f, 0.25f, 0.75f, 0.125f, 0.625f, 0.375f, 0.875f, 0.0625f, 0.5625f, 0.3125f
-    };
-    float jittermatrixY[11] = {
-        .0f,
-        0.33333333333333331f,
-        0.66666666666666663f,
-        0.1111111111111111f,
-        0.44444444444444442f,
-        0.77777777777777768f,
-        0.22222222222222221f,
-        0.55555555555555558f,
-        0.88888888888888884f,
-        0.037037037037037035f,
-        0.37037037037037035f
-    };
     float x8aa_X[8] = {
         -7.0f / 8.0f,
         -5.0f / 8.0f,
@@ -164,13 +191,13 @@ void CTemporalAA::JitterProjMatrix()
         7.0f / 8.0f,
         3.0f / 8.0f,
         5.0f / 8.0f };
-    float uniformX[11] = { 0.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    float uniformY[11] = { 0.0f, 1.0f, -1.0f, -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f };
     RwGraphicsMatrix *projTransformRef = (RwGraphicsMatrix*)&RwD3D9D3D9ProjTransform;
 
-    const bool taaEnabled = gTAASettingsBlock.GetToggleField( "EnableTAA" );
+    // An external handler accumulates on its own and needs the jitter (see RenderHookAPI.h), so the accumulation
+    // handles only gate this when nothing else will accumulate the frame.
+    const bool taaEnabled = gTAASettingsBlock.GetToggleField( "EnableTAA" ) &&
+                            ( HasExternalHandler() || CanAccumulate() );
     const UINT subPixelCount = min( max( gTAASettingsBlock.GetUInt( "SubPixelCount" ), 1u ), 8u );
-    auto camera = Scene.m_pRwCamera;
     m_mView       = *(RwGraphicsMatrix *)&RwD3D9D3D9ViewTransform;
     m_mProjection = *projTransformRef;
     m_fPrevJitterX = m_fJitterX;
@@ -208,6 +235,10 @@ void CTemporalAA::JitterProjMatrix()
 
 void CTemporalAA::SaveViewMatrix()
 {
+    // Public, so the camera test belongs here as well as at the call sites, and the stored matrix keeps its previous
+    // value when there is no camera to take one from.
+    if ( Scene.m_pRwCamera == nullptr )
+        return;
     RwMatrix* camMatrix = RwFrameGetLTM( static_cast<RwFrame*>( Scene.m_pRwCamera->object.object.parent ) );
     // rw used inverse of camera frame matrix with negative column-vector
     RwMatrixInvert( (RwMatrix*)&m_mPrevView, camMatrix );
@@ -223,6 +254,14 @@ void CTemporalAA::SaveViewMatrix()
 
 void CTemporalAA::Render( RwRaster * input, RwRaster* output, RwRaster* gBuff1, RwRaster* gBuff2 )
 {
+    // The view matrix below and SaveViewMatrix on two of the three exits both go through the game camera, which does
+    // not exist until the scene has one. The copy keeps the output defined, because the caller swaps its targets
+    // whether or not this pass wrote anything.
+    if ( Scene.m_pRwCamera == nullptr )
+    {
+        CFullscreenQuad::Copy( input, nullptr, output );
+        return;
+    }
     RwV3d* curCamPos = RwMatrixGetPos( &Scene.m_pRwCamera->viewMatrix );
     g_externalTAAHandled = RunExternalTAA( input, output, gBuff1, m_fJitterX, m_fJitterY, m_mView, m_mProjection );
     if ( g_externalTAAHandled )
@@ -231,6 +270,13 @@ void CTemporalAA::Render( RwRaster * input, RwRaster* output, RwRaster* gBuff1, 
         m_bFirstTimeRender = true;
         m_vPrevCamPos      = *curCamPos;
         SaveViewMatrix();
+        return;
+    }
+    // A start-up that did not finish leaves no shader, no constant buffer, or no accumulation raster, and all of them
+    // are used below. Passing the frame through keeps the output defined instead of leaving it blank.
+    if ( !CanAccumulate() )
+    {
+        CFullscreenQuad::Copy( input, nullptr, output );
         return;
     }
     m_pTAABuffer->data.PrevView = m_mPrevView;
@@ -270,14 +316,26 @@ void CTemporalAA::Render( RwRaster * input, RwRaster* output, RwRaster* gBuff1, 
 
 void CTemporalAA::QueueTextureReload()
 {
-    CRwD3D1XEngine *dxEngine = dynamic_cast<CRwD3D1XEngine *>(g_pRwCustomEngine);
-    if ( !dxEngine->m_bScreenSizeChanged )
+    // static_cast cannot yield null for a non-null pointer, so the test below covers only the engine being absent, which
+    // happens before start-up and after unload. The queueing that runs before this one in the same frame converts the
+    // same pointer without a test, so this hardens its own unit rather than being a guard that fires on its own.
+    CRwD3D1XEngine *dxEngine = static_cast<CRwD3D1XEngine *>(g_pRwCustomEngine);
+    if ( dxEngine == nullptr || !dxEngine->m_bScreenSizeChanged )
         return;
-    for ( int i = 0; i < 2; i++ )
+    // A start-up that ran before a display mode existed could not create the rasters and reported that the pass is
+    // disabled, and the resize below only queues rasters that exist. A mode change is the first point at which a valid
+    // size is known to exist, so retrying here is what keeps such a start-up from disabling the pass for the session.
+    if ( m_pAccumRasters[0] == nullptr || m_pAccumRasters[1] == nullptr )
+        CreateAccumRasters();
+    for ( auto &raster : m_pAccumRasters )
     {
-        m_pAccumRasters[i]->width  = RsGlobal.maximumWidth;
-        m_pAccumRasters[i]->height = RsGlobal.maximumHeight;
-        dxEngine->m_pRastersToReload.push_back( m_pAccumRasters[i] );
+        // A start-up that never created a raster leaves nothing to resize, and the resize below would write through
+        // the null pointer.
+        if ( raster == nullptr )
+            continue;
+        raster->width  = RsGlobal.maximumWidth;
+        raster->height = RsGlobal.maximumHeight;
+        dxEngine->m_pRastersToReload.push_back( raster );
     }
     // The engine reallocates both accum rasters later in this frame, which drops whatever history they held,
     // so the next Render would blend against an undefined previous frame. Marking it as the first frame makes

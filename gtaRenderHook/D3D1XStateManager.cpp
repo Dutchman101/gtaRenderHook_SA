@@ -595,43 +595,31 @@ void CD3D1XStateManager::SetRaster( RwRaster * raster, int Stage )
 {
     auto context = GET_D3D_CONTEXT;
     // todo: add lazy set
+    // GetD3D1XRaster is a field offset, so it cannot be null while raster is not, which made the test that used to sit
+    // here dead. The resource and the cast result are what can be null, and both were dereferenced. Binding the null
+    // view in that case clears the stage, which is what the branch that could never be reached was written to do.
+    ID3D11ShaderResourceView * srv = nullptr;
     if ( raster != nullptr )
     {
-        auto d3d1xRaster = GetD3D1XRaster( raster );
-        if ( d3d1xRaster != nullptr )
-        {
-            auto res =
-                dynamic_cast<ID3D1XShaderViewable *>( d3d1xRaster->resourse )
-                    ->GetShaderResourceView();
-            context->PSSetShaderResources( Stage, 1, &res );
-        }
-        else
-        {
-            ID3D11ShaderResourceView* res = nullptr;
-            context->PSSetShaderResources( Stage, 1, &res );
-        }
+        if ( auto shaderViewable = dynamic_cast<ID3D1XShaderViewable *>( GetD3D1XRaster( raster )->resourse ) )
+            srv = shaderViewable->GetShaderResourceView();
     }
-    else
-    {
-        ID3D11ShaderResourceView* res = nullptr;
-        context->PSSetShaderResources( Stage, 1, &res );
-    }
+    context->PSSetShaderResources( Stage, 1, &srv );
 }
 
 void CD3D1XStateManager::SetRasterCS( RwRaster * raster, int Stage )
 {
     auto context = GET_D3D_CONTEXT;
     // todo: add lazy set
+    // Same shape as SetRaster, and cast to the interface rather than to CD3D1X2DTexture, which a 3D or cube resource
+    // does not derive from even though all three are shader-viewable.
+    ID3D11ShaderResourceView * srv = nullptr;
     if ( raster != nullptr )
     {
-        auto res = dynamic_cast<CD3D1X2DTexture*>( GetD3D1XRaster( raster )->resourse )->GetShaderResourceView();
-        context->CSSetShaderResources( Stage, 1, &res );
+        if ( auto shaderViewable = dynamic_cast<ID3D1XShaderViewable *>( GetD3D1XRaster( raster )->resourse ) )
+            srv = shaderViewable->GetShaderResourceView();
     }
-    else
-    {
-        ID3D11ShaderResourceView* res = nullptr;
-        context->CSSetShaderResources( Stage, 1, &res );
-    }
+    context->CSSetShaderResources( Stage, 1, &srv );
 }
 
 void CD3D1XStateManager::SetSunDir( RwV3d * vec, float dnBalance )
@@ -849,11 +837,14 @@ void CD3D1XStateManager::FlushStates()
         if ( m_pCurrentRaster != nullptr )
         {
             RwD3D1XRaster* d3dRaster = GetD3D1XRaster( m_pCurrentRaster );
-            if ( d3dRaster->resourse != nullptr )
+            // Cast to the interface, because the concrete CD3D1X2DTexture cast that stood here rejected the cube and
+            // 3D resources this slot legitimately receives. Texture enable follows the view rather than the resource,
+            // so texturing is never turned on for a raster that binds nothing.
+            if ( auto shaderViewable = dynamic_cast<ID3D1XShaderViewable *>( d3dRaster->resourse ) )
             {
                 SetTextureEnable( true );
 
-                auto srv = dynamic_cast<CD3D1X2DTexture*>( d3dRaster->resourse )->GetShaderResourceView();
+                auto srv = shaderViewable->GetShaderResourceView();
                 // TODO: add ability to set raster-to-shader binding inside pipeline, to allow setting textures to different shaders
                 context->PSSetShaderResources( 0, 1, &srv );
                 //context->DSSetShaderResources(0, 1, &srv);

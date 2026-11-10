@@ -222,7 +222,7 @@ void CDeferredRenderer::RenderOutput()
     //}
 
     // Render point and spot lights
-    if ( CLightManager::m_nLightCount > 0 )
+    if ( CLightManager::GetLightCount() > 0 )
     {
         CLightManager::SortByDistance( TheCamera.GetPosition().ToRwV3d() );
         CLightManager::Update();

@@ -9,13 +9,18 @@ struct CBVoxel
 };
 class CVoxelOctreeRenderer
 {
+public:
+    // The clip map, the radiance volumes and the level of detail all span the same count: each array holds one entry
+    // per level, the lod parameters index them from 1 (or from 0 for the radiance array), and the caller that walks
+    // the levels takes its bound from here instead of repeating the number.
+    const static int voxelLodCount = 3;
 private:
 
     static RwTexture* voxelOctreeBricks;
     static RwTexture* voxelOctreeStruct;
-    static RwRaster* voxelRadiance[3];
+    static RwRaster* voxelRadiance[voxelLodCount];
 
-    static RwRaster* voxelClipMap[3];
+    static RwRaster* voxelClipMap[voxelLodCount];
 
     //static RwRaster* voxelNormals[4];
     static CD3D1XComputeShader* m_voxelCS;

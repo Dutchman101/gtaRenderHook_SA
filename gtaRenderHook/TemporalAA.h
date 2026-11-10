@@ -33,6 +33,9 @@ public:
     static float GetJitterDeltaY() { return m_fPrevJitterY - m_fJitterY; }
 
   private:
+    static bool CanAccumulate();
+    // creates whichever accumulation rasters are missing, so start-up and the reload retry cannot disagree
+    static void CreateAccumRasters();
     static CD3D1XShader * m_pTemporalAA;
     static RwRaster* m_pAccumRasters[2];
     static int m_nCurrentAccRaster;

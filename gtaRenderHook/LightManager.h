@@ -18,8 +18,11 @@ class CLightManager
 {
 public:
     static CLight m_aLights[1024];
-    static int m_nLightCount;
 private:
+    // Counted only while m_pLightBuffer exists, so a count above zero always names lights the point light pass can
+    // read. Private because that is what the point light gate's safety rests on, and the count is the only member
+    // a writer outside this file could use to break it.
+    static int m_nLightCount;
     static CD3D1XConstantBuffer<LightsCB>* m_pLightBuffer;
 public:
     static void Init();
@@ -28,6 +31,7 @@ public:
     static bool AddLight( const CLight &light );
     static void SortByDistance( const RwV3d& from );
     static void Update();
+    static int GetLightCount();
     static CD3D1XConstantBuffer<LightsCB>* GetBuffer();
 };
 

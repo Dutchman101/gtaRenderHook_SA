@@ -25,6 +25,17 @@ class ID3D1XShaderViewable
     virtual ID3D11ShaderResourceView *GetShaderResourceView() const = 0;
 };
 
+/*!
+    Capability of a raster resource that owns an unordered access view. Nothing in this hierarchy creates one yet, so
+    the query below resolves to null for every current resource and a caller that binds UAVs gets its slots cleared
+    rather than filled.
+*/
+class ID3D1XUnorderedAccessViewable
+{
+  public:
+    virtual ID3D11UnorderedAccessView *GetUnorderedAccessView() const = 0;
+};
+
 class CD3D1XBaseTexture
 {
 public:
@@ -37,6 +48,14 @@ public:
         Returns if texture is currently locked for reading
     */
     bool	IsLockedToRead() const { return m_bIsLocked; }
+    /*!
+        Clears the read lock flag without touching the staging copy, for a lock that failed after setting it
+    */
+    void	ResetLockedToRead() { m_bIsLocked = false; }
+    /*!
+        Returns the raster this texture was created from
+    */
+    RwRaster*	GetParent() const { return m_pParent; }
     /*!
         Locks texture to preform some operation on texture buffer
     */

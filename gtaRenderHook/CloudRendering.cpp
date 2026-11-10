@@ -55,6 +55,14 @@ void CCloudRendering::Shutdown()
         RwRasterDestroy( m_pCloudsRaster );
     if ( m_pNoise3DRaster )
         RwRasterDestroy( m_pNoise3DRaster );
+
+    // The handles outlive this call, so they are cleared here rather than left set to memory that was just released. A
+    // second shutdown then releases nothing, and the reload path sees the same absent handles it sees before setup.
+    m_pCloudRenderingCB = nullptr;
+    m_pRenderCloudsPS   = nullptr;
+    m_pVolumetricCombinePS = nullptr;
+    m_pCloudsRaster     = nullptr;
+    m_pNoise3DRaster    = nullptr;
 }
 
 void CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
@@ -122,6 +130,12 @@ void CCloudRendering::QueueTextureReload() {
     {
         float renderingScale =
             gCloudRenderingSettings.GetFloat( "CloudsRenderingScale" );
+        // A raster that was never created has no size to change, and the screen size change that reaches here is the same
+        // one that can make creation fail. The reload pass runs on its own and clears nothing this call owns, so skipping
+        // the queue here leaves it with no entry to process for this effect and nothing left holding a stale size.
+        if ( m_pCloudsRaster == nullptr )
+            return;
+
         m_pCloudsRaster->width =
             (int)( RsGlobal.maximumWidth * renderingScale );
         m_pCloudsRaster->height =
@@ -133,6 +147,10 @@ void CCloudRendering::QueueTextureReload() {
 void CCloudRendering::GenerateCloudsTexture() {
     m_pNoise3DRaster = RwRasterCreate(
         128, 128, 128, ( rwRASTERTYPECAMERATEXTURE + 1 ) | rwRASTERFORMAT565 );
+    // The lookup below is an offset added to the raster, so a raster that was not created is not a null to compare
+    // against afterwards, and the texture would be written into the space just past the null address.
+    if ( m_pNoise3DRaster == nullptr )
+        return;
     auto raster_impl = GetD3D1XRaster( m_pNoise3DRaster );
 
     std::vector<RwV4d> pixel_array;

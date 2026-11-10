@@ -543,7 +543,15 @@ void CopyViewMatrix( RwMatrix* viewTransformRef, RwFrame* camframe )
 
 void CSAIdleHook::RenderVoxelGI()
 {
+    // The first call below reads the voxel camera, and initialisation can stop before it exists, so a pass that has no
+    // camera to move over the player ends here instead of reading through it.
+    if ( CVoxelOctreeRenderer::m_pVoxelCamera == nullptr )
+        return;
+    // The same reason as above: the camera handle can exist while the frame it is driven through was never created,
+    // and the translate call below is made through that frame.
     auto s_cam_frame = RwCameraGetFrame( CVoxelOctreeRenderer::m_pVoxelCamera );
+    if ( s_cam_frame == nullptr )
+        return;
     auto campos = RwMatrixGetPos( RwFrameGetMatrix( RwCameraGetFrame( Scene.m_pRwCamera ) ) );
     /*if (FindPlayerPos(&cpos, 0) == nullptr)
         Campos = RwMatrixGetPos(RwFrameGetMatrix(RwCameraGetFrame(Scene.curCamera)));
@@ -553,7 +561,7 @@ void CSAIdleHook::RenderVoxelGI()
     //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATECULLMODE, rwCULLMODECULLNONE);
     CVoxelOctreeRenderer::CleanVoxelOctree();
 
-    for ( size_t i = 1; i < 4; i++ )
+    for ( int i = 1; i <= CVoxelOctreeRenderer::voxelLodCount; i++ )
     {
         m_uiDeferredStage = 3;
         CVoxelOctreeRenderer::SetVoxelLODSize( i );

@@ -42,6 +42,10 @@ CD3D1XShader::~CD3D1XShader()
         m_pBlob->Release();
         m_pBlob = nullptr;
     }
+    // Every Set() skips its device call while this object is the one its class still remembers, so a released
+    // shader left in that slot makes a later shader allocated at the same address skip its own binding and draw
+    // with whatever was bound before it. Cleared here rather than at each site that releases a shader.
+    InvalidateStateCache();
 }
 
 void CD3D1XShader::Set() {}

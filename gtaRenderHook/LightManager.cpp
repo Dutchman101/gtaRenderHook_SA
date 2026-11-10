@@ -14,12 +14,18 @@ int CLightManager::m_nLightCount = 0;
 
 void CLightManager::Init()
 {
+    // Started from empty so a second start-up does not overwrite the buffer a previous one owns and leak it.
+    Shutdown();
     m_pLightBuffer = new CD3D1XConstantBuffer<LightsCB>();
 }
 
 void CLightManager::Shutdown()
 {
+    // Cleared as it is released: a consumer that reads the buffer afterwards gets a null rather than a handle to
+    // released memory, and the count is cleared so the point light pass cannot work through the empty slot.
     delete m_pLightBuffer;
+    m_pLightBuffer = nullptr;
+    m_nLightCount = 0;
 }
 
 void CLightManager::Reset()
@@ -29,6 +35,10 @@ void CLightManager::Reset()
 
 bool CLightManager::AddLight( const CLight& light )
 {
+    // Lights are only counted while there is a buffer to hand them to, so a count above zero always means the point
+    // light pass has something to read rather than an empty slot.
+    if ( m_pLightBuffer == nullptr )
+        return false;
     if ( m_nLightCount < 1024 )
     {
         m_aLights[m_nLightCount] = light;
@@ -65,4 +75,9 @@ void CLightManager::Update()
 CD3D1XConstantBuffer<LightsCB> * CLightManager::GetBuffer()
 {
     return m_pLightBuffer;
+}
+
+int CLightManager::GetLightCount()
+{
+    return m_nLightCount;
 }

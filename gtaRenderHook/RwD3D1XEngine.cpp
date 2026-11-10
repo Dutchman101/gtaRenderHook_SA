@@ -496,6 +496,56 @@ bool CRwD3D1XEngine::Im2DRenderIndexedPrimitive( RwPrimitiveType primType, RwIm2
 
 // RASTER FUNCTIONS
 
+// The size of the buffer a lock hands out for one level: that level's stride times its row count, with a floor of 64
+// bytes so textures smaller than 8x8 still get a buffer. The allocation in RasterLock and the stream reads in
+// NativeTextureRead both use this, so the size a read is checked against is the size that was allocated, and the
+// multiply stays in size_t so a large level cannot wrap the count before the allocation sees it.
+static size_t RasterLockBufferSize( const RwRaster *raster )
+{
+    return max( static_cast<size_t>( raster->stride ) * static_cast<size_t>( raster->height ), 64 );
+}
+
+// Whether the texture behind a raster really has the level a lock named. A lock level is used as the destination
+// subresource index, and for these textures that index is the mip level itself, so the level has to name one the
+// texture holds. The textures created here carry a shortened mip chain, so the level a file supplies can name one the
+// texture does not have, and an index that names no level of the texture is not an index that identifies a subresource
+// of it. The ways the level can be unusable stay apart because the caller treats them differently: the two that only
+// happen when something is wrong are reported, and a level past the last is the shortened chain doing its job.
+enum class eRasterLevelVerdict
+{
+    Present,
+    NoResource,
+    NotTwoDimensional,
+    PastLastLevel
+};
+
+static eRasterLevelVerdict RasterLevelVerdict( ID3D11Resource *resource, UINT level )
+{
+    if ( resource == nullptr )
+        return eRasterLevelVerdict::NoResource;
+    D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    resource->GetType( &dimension );
+    // Only a 2D texture is accepted. A volume's subresource spans its depth slices while the update this gates
+    // supplies one slice and no depth pitch, so a volume cannot be filled from the lock buffer, and every non-2D
+    // resource is refused rather than a single-slice volume being special-cased.
+    if ( dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D )
+        return eRasterLevelVerdict::NotTwoDimensional;
+    D3D11_TEXTURE2D_DESC desc{};
+    static_cast<ID3D11Texture2D*>( resource )->GetDesc( &desc );
+    // A level count of zero asks for the full chain rather than for an empty one, so the count comes from the extent
+    // instead: a width by height base holds one level per halving down to one, which is one plus the number of halvings
+    // the larger extent allows. Reading the zero as an empty chain would drop every upload for the small textures, and
+    // reading it as unbounded would hand an index past the last level to the update this test guards.
+    UINT levelCount = desc.MipLevels;
+    if ( levelCount == 0 )
+    {
+        levelCount = 1;
+        for ( UINT extent = max( desc.Width, desc.Height ); extent > 1; extent >>= 1 )
+            ++levelCount;
+    }
+    return level < levelCount ? eRasterLevelVerdict::Present : eRasterLevelVerdict::PastLastLevel;
+}
+
 bool CRwD3D1XEngine::RasterCreate( RwRaster *raster, UINT flags )
 {
     RwD3D1XRaster* d3dRaster = GetD3D1XRaster( raster );
@@ -651,7 +701,12 @@ bool CRwD3D1XEngine::NativeTextureRead( RwStream *stream, RwTexture** tex )
             {
                 if ( RwStreamRead( stream, &lengthOut, sizeof( RwUInt32 ) ) == sizeof( RwUInt32 ) )
                 {
-                    if ( RwStreamRead( stream, RwRasterLock( raster, j, rwRASTERLOCKWRITE ), lengthOut ) == lengthOut )
+                    void *lockedPixels = RwRasterLock( raster, j, rwRASTERLOCKWRITE );
+                    // A refused lock hands back no destination, and the read below would write through it. The length
+                    // comes from the file, so it is also compared against the buffer the lock allocated: a longer read
+                    // would write past the end of that buffer.
+                    if ( lockedPixels != nullptr && lengthOut <= RasterLockBufferSize( raster ) &&
+                         RwStreamRead( stream, lockedPixels, lengthOut ) == lengthOut )
                     {
                         RwRasterUnlock( raster );
                         continue;
@@ -729,7 +784,12 @@ bool CRwD3D1XEngine::NativeTextureRead( RwStream *stream, RwTexture** tex )
             {
                 if ( RwStreamRead( stream, &lengthOut, sizeof( RwUInt32 ) ) == sizeof( RwUInt32 ) )
                 {
-                    if ( RwStreamRead( stream, RwRasterLock( raster, j, rwRASTERLOCKWRITE ), lengthOut ) == lengthOut )
+                    void *lockedPixels = RwRasterLock( raster, j, rwRASTERLOCKWRITE );
+                    // A refused lock hands back no destination, and the read below would write through it. The length
+                    // comes from the file, so it is also compared against the buffer the lock allocated: a longer read
+                    // would write past the end of that buffer.
+                    if ( lockedPixels != nullptr && lengthOut <= RasterLockBufferSize( raster ) &&
+                         RwStreamRead( stream, lockedPixels, lengthOut ) == lengthOut )
                     {
 
                         RwRasterUnlock( raster );
@@ -763,11 +823,25 @@ bool CRwD3D1XEngine::NativeTextureRead( RwStream *stream, RwTexture** tex )
 
 bool CRwD3D1XEngine::RasterLock( RwRaster *raster, UINT flags, void** data )
 {
-    UINT level = flags >> 8;
+    // Every refusal below leaves the caller with no buffer, so the slot is cleared before any of them can be taken
+    // rather than only on the paths this function happens to write today.
+    *data = nullptr;
+
+    // The level arrives packed above the lock mode, and a shift by the operand width or more is undefined, so the value
+    // is held below that width before it is used to scale the raster.
+    UINT level = min( flags >> 8, 31u );
     RwD3D1XRaster* d3dRaster = GetD3D1XRaster( raster );
 
     // If we already had locked this raster we shouldn't continue.
     if ( raster->cpPixels != nullptr )
+        return false;
+
+    // A raster can reach here with no resource at all: RasterCreate reports success for the 3D texture type it leaves
+    // empty, and for the raster types its switch does not handle. A read lock would hand back the GPU copy of that
+    // absent resource; a write lock would hand back a buffer that the matching unlock has nowhere to upload, so every
+    // byte the caller wrote would be freed unseen. Refusing both here, before the resize and the allocation below,
+    // keeps the refusal free of side effects and hands the caller its own failure path instead.
+    if ( d3dRaster->resourse == nullptr )
         return false;
 
     d3dRaster->lockFlags = static_cast<RwUInt8>( level );
@@ -787,13 +861,39 @@ bool CRwD3D1XEngine::RasterLock( RwRaster *raster, UINT flags, void** data )
         raster->stride = ( raster->width * 32 + 7 ) / 8;
 
     // Lower bound is 64 to avoid textures smaller than 8x8.
-    size_t pixelCount = max( static_cast<size_t>( raster->stride*raster->height ), 64 );
+    size_t pixelCount = RasterLockBufferSize( raster );
     raster->cpPixels = (RwUInt8*)malloc( pixelCount );
+    // A failed allocation leaves the size and stride written above in place, and the matching unlock stops at the
+    // null pixel buffer without putting them back. Restore them here so the refused lock leaves the raster as it was.
+    if ( raster->cpPixels == nullptr )
+    {
+        raster->width = raster->originalWidth;
+        raster->height = raster->originalHeight;
+        raster->stride = 0;
+        d3dRaster->lockFlags = 0;
+        return false;
+    }
 
     *data = (void*)raster->cpPixels;
     if ( flags&rwRASTERLOCKREAD /*|| d3dRaster->resourse->hasPalette()*/ )
     {
         *data = d3dRaster->resourse->LockToRead();
+        // The read lock reports a staging failure by returning no buffer after it has already set its read flag. A lock
+        // that hands back nothing has to be refused and undone here, or the raster is left holding a buffer it was told
+        // not to use and the next unlock takes the read path instead of uploading what the caller wrote. The refusal
+        // above is what keeps this call safe: it returns before this point whenever there is no resource to lock.
+        if ( *data == nullptr )
+        {
+            d3dRaster->resourse->ResetLockedToRead();
+            *data = nullptr;
+            free( raster->cpPixels );
+            raster->cpPixels = nullptr;
+            raster->stride = 0;
+            raster->width = raster->originalWidth;
+            raster->height = raster->originalHeight;
+            d3dRaster->lockFlags = 0;
+            return false;
+        }
     }
     return true;
 }
@@ -803,13 +903,46 @@ bool CRwD3D1XEngine::RasterUnlock( RwRaster *raster )
     RwD3D1XRaster* d3dRaster = GetD3D1XRaster( raster );
     if ( raster->cpPixels == nullptr )
         return false;
-    if ( ( raster->width > 4 ) && ( raster->height > 4 ) )
+    // The lock refuses a raster that has no resource, so this slot is empty only when the resource was released while
+    // the raster was locked. There is nothing left to upload to then, so the upload is skipped.
+    auto d3dtexture = d3dRaster->resourse;
+    if ( d3dtexture != nullptr )
     {
-        auto d3dtexture = d3dRaster->resourse;
-        if ( !d3dtexture->IsLockedToRead() )
-            m_pRenderer->getContext()->UpdateSubresource( d3dtexture->GetResource(), d3dRaster->lockFlags, nullptr, raster->cpPixels, raster->stride, 0 );
-        else
+        // A read lock is completed whatever level it holds: the staging copy has to be unmapped and copied back, or the
+        // next lock finds the texture still locked and fails against it.
+        if ( d3dtexture->IsLockedToRead() )
             d3dtexture->UnlockFromRead();
+        else
+        {
+            // A write lock is uploaded to the level it locked, and that level is only a subresource while the texture
+            // has it. The textures created here carry a shortened mip chain, so a level past the last one the texture
+            // has is left alone instead of being handed to an update that cannot apply to it.
+            ID3D11Resource *resource = d3dtexture->GetResource();
+            switch ( RasterLevelVerdict( resource, d3dRaster->lockFlags ) )
+            {
+            case eRasterLevelVerdict::Present:
+                m_pRenderer->getContext()->UpdateSubresource( resource, d3dRaster->lockFlags, nullptr, raster->cpPixels, raster->stride, 0 );
+                break;
+            case eRasterLevelVerdict::NoResource:
+                g_pDebug->printError( "Raster unlock upload skipped: the raster holds no texture resource to upload the locked pixels to." );
+                break;
+            case eRasterLevelVerdict::NotTwoDimensional:
+                g_pDebug->printError( "Raster unlock upload skipped: the raster texture is not a 2D texture, so the single slice the lock buffer holds is not known to fill its subresource." );
+                break;
+            case eRasterLevelVerdict::PastLastLevel:
+                // A file supplies the whole mip chain while these textures keep a shortened one, so a level past the
+                // last is the engine's own choice rather than a fault. Reporting it would raise an error on every
+                // mipmapped texture the game loads and bury the two reports above.
+                break;
+            }
+        }
+    }
+    else
+    {
+        // A raster that reaches its unlock with a pixel buffer but without a texture lost that texture while it was
+        // locked, which only a destroy or a release during the lock can do. The pixels the caller wrote are discarded
+        // here, so the skip is reported rather than left looking like an upload that worked.
+        g_pDebug->printError( "Raster unlock upload skipped: the raster no longer holds a texture, so the pixels the lock handed out are discarded." );
     }
     free( raster->cpPixels );
     raster->cpPixels = nullptr;
@@ -1617,7 +1750,6 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
     // not slide down into lower SV_Target numbers.
     ID3D11RenderTargetView * pRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
     RwUInt32 boundCount = 0;
-    std::vector<ID3D11UnorderedAccessView*> pUAVs;
     for ( RwUInt32 i = 0; i < rasterCount && boundCount < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++ )
     {
         if ( rasters[i] )
@@ -1628,6 +1760,12 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
         }
         boundCount++;
     }
+    // The runtime only passes this bind on to the driver when the start slot sits at or past the colour targets being
+    // bound and when that slot plus the view count stays inside the u# register file. Breaching either rule drops the
+    // colour and depth targets along with the views, so a request that breaches one binds no views at all. The start
+    // slot is itself a register index, so the only values that name a register are the ones below the register file
+    // count: clamping towards that count would name a register past the end instead of refusing the request.
+    const bool uavSlotsInRegisterFile = uavStart >= boundCount && uavStart < D3D11_PS_CS_UAV_REGISTER_COUNT;
     if ( boundCount > 0 && rasters[0] != nullptr )
     {
         D3D11_VIEWPORT vp;
@@ -1639,24 +1777,52 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
 
         g_pStateMgr->SetViewport( vp );
     }
-    if ( uavs == nullptr || uavCount == 0 || uavs[0] == nullptr )
+    // A request that names no view at all is a different request from one that names views no register can hold, and
+    // only the second loses its views: the first still releases the single register it names.
+    const bool uavRequestNamesViews = uavs != nullptr && uavCount > 0 && uavs[0] != nullptr;
+    if ( uavSlotsInRegisterFile && uavRequestNamesViews )
     {
-        ID3D11UnorderedAccessView* puav = nullptr;
-
-        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( boundCount, pRTVs, depthStencilRes,
-                                                                              uavStart, 1, &puav, nullptr );
-        return;
+        // One entry per requested view with its index preserved, so a raster without an unordered access view keeps
+        // its slot instead of letting the views after it slide down into lower u# registers. The array is the size of
+        // the register file, which is also what bounds the request: uavStart is a register index, so only the registers
+        // above it can be filled.
+        ID3D11UnorderedAccessView* pUAVs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
+        UINT uavBoundCount = 0;
+        for ( RwUInt32 i = 0; i < uavCount && uavStart + uavBoundCount < D3D11_PS_CS_UAV_REGISTER_COUNT; i++ )
+        {
+            if ( uavs[i] )
+            {
+                RwD3D1XRaster* pd3dUAVRaster = GetD3D1XRaster( uavs[i] );
+                if ( auto unorderedAccess = dynamic_cast<ID3D1XUnorderedAccessViewable*>( pd3dUAVRaster->resourse ) )
+                    pUAVs[uavBoundCount] = unorderedAccess->GetUnorderedAccessView();
+            }
+            uavBoundCount++;
+        }
+        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews(
+            boundCount, pRTVs, depthStencilRes, uavStart, uavBoundCount, pUAVs, nullptr );
     }
-    /*for (RwUInt32 i = 0; i < uavCount; i++)
+    else if ( uavSlotsInRegisterFile )
     {
-        RwD3D1XRaster* pd3dRaster = GetD3D1XRaster(uavs[i]);
-        pUAVs.push_back(pd3dRaster->resourse->GetUAV());
-    }*/
-
-    m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews( boundCount, pRTVs, depthStencilRes,
-                                                                          uavStart, static_cast<UINT>( pUAVs.size() ),
-                                                                          pUAVs.data(), nullptr );
-    if ( boundCount > 1 )
+        // The request names no view to bind, so the register it does name is released rather than left holding whatever
+        // an earlier pass put there.
+        ID3D11UnorderedAccessView* puav = nullptr;
+        m_pRenderer->getContext()->OMSetRenderTargetsAndUnorderedAccessViews(
+            boundCount, pRTVs, depthStencilRes, uavStart, 1, &puav, nullptr );
+    }
+    else
+    {
+        // The start slot names no u# register, so this request binds no view, and the plain bind is the one call left
+        // that can still deliver its colour and depth targets. What that call documents about those targets is that any
+        // target it does not name is set to null; it documents nothing about the u# registers, so this path does not
+        // claim to have released anything there.
+        m_pRenderer->getContext()->OMSetRenderTargets( boundCount, pRTVs, depthStencilRes );
+    }
+    // FlushRenderTargets re-issues the colour and depth targets whenever the cache describes a different bind,
+    // so recording the targets the device was just given keeps the two in step and leaves a later flush no
+    // difference to re-issue.
+    g_pStateMgr->SetRenderTargets( boundCount, pRTVs, depthStencilRes );
+    // The bound targets were cleared only for a request that named views, so that remains the condition here.
+    if ( uavRequestNamesViews && boundCount > 1 )
     {
         float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
         for ( RwUInt32 i = 0; i < boundCount; i++ )
@@ -1674,7 +1840,10 @@ void CRwD3D1XEngine::ReloadTextures()
             if ( raster )
             {
                 auto resource = GetD3D1XRaster( raster )->resourse;
-                resource->Reallocate();
+                // resourse is null between RasterDestroy and the next Reallocate, and Reallocate is virtual, so a null
+                // receiver faults instead of doing nothing.
+                if ( resource )
+                    resource->Reallocate();
             }
         }
         m_pRastersToReload = {};
