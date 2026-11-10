@@ -18,13 +18,37 @@ struct CBCloudRendering
     float CloudSpeed;
 };
 
+// Globals.hlsl declares these same members in cbuffer Clouds. The size is checked here so a member added on one
+// side without the other fails the build instead of quietly shifting every later field.
+static_assert( sizeof( CBCloudRendering ) == 48,
+               "CBCloudRendering must match the Clouds cbuffer in Globals.hlsl" );
+
+// Engine weather, kept in its own buffer because more passes read it than the cloud pass. Globals.hlsl puts it
+// at b11 and moves cbuffer Clouds to b12, because b10 carries the dynamic light array that Deferred.hlsl
+// declares and the light pass binds that array there mid frame. A weather or cloud member read from b10 after
+// that point would read light data instead.
+struct CBWeatherState
+{
+    float Foggyness;
+    float Rain;
+    float WetRoads;
+    float Sandstorm;
+};
+
+// Four floats keep the buffer a whole number of float4 registers, so CD3D1XConstantBuffer::Update stays on its
+// direct upload path. The layout is checked here for the same reason as the cloud buffer above.
+static_assert( sizeof( CBWeatherState ) == 16,
+               "CBWeatherState must match the WeatherState cbuffer in Globals.hlsl" );
+
 class CCloudRendering
 {
   public:
     static void Init();
     static void Shutdown();
 
-    static void RenderVolumetricEffects( RwRaster *normalsDepth, RwRaster *from, RwRaster *to );
+    static bool RenderVolumetricEffects( RwRaster *normalsDepth, RwRaster *from, RwRaster *to );
+    static void UpdateWeatherState();
+    static void UpdateCloudState();
     static void QueueTextureReload();
     static void GenerateCloudsTexture();
 
@@ -36,6 +60,7 @@ class CCloudRendering
     static RwRaster *    m_pCloudsRaster;
     static RwRaster *    m_pNoise3DRaster;
     static CD3D1XConstantBuffer<CBCloudRendering> *m_pCloudRenderingCB;
+    static CD3D1XConstantBuffer<CBWeatherState> *  m_pWeatherCB;
 };
 
 /*!

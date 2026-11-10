@@ -188,6 +188,13 @@ void CDeferredRenderer::RenderOutput()
         m_bFinalRasterHistoryInvalid = false;
     }
 
+    // The sun, point light, reflection, final, atmosphere and volumetric shaders all read weather, and five of
+    // them also read the cloud block's Time, so both buffers are written here, ahead of the first of those
+    // passes and outside the cloud-render toggle that used to be their only source. b11 is where Globals.hlsl
+    // declares cbuffer WeatherState and b12 where it declares cbuffer Clouds.
+    CCloudRendering::UpdateWeatherState();
+    CCloudRendering::UpdateCloudState();
+
     // g_pDebug->printMsg("Start of deffered output.");
     m_pDeferredBuffer->data.SSRMaxIterations =
         gDeferredSettings.GetUInt( "SSRMaxIterations" );
@@ -277,12 +284,15 @@ void CDeferredRenderer::RenderOutput()
     // m_pShadowRenderer->SetShadowBuffer();
     m_pAtmospherePassPS->Set();
     CFullscreenQuad::Draw();
+    // The blit below reads dest_raster unconditionally, so the cloud target is only adopted when the pass
+    // reports that it wrote it. A refused pass then leaves the blit reading the atmosphere result that the
+    // preceding pass did write, instead of a target nothing has written this frame.
     auto dest_raster = m_pFinalRasters[2];
-    if ( gCloudRenderingSettings.GetToggleField( "EnableCloudRendering" ) )
+    if ( gCloudRenderingSettings.GetToggleField( "EnableCloudRendering" ) &&
+         CCloudRendering::RenderVolumetricEffects( m_aDeferredRasters[1], m_pFinalRasters[2],
+                                                   m_pFinalRasters[3] ) )
     {
         dest_raster = m_pFinalRasters[3];
-        CCloudRendering::RenderVolumetricEffects(
-            m_aDeferredRasters[1], m_pFinalRasters[2], dest_raster );
     }
     for ( auto i = 0; i < 7; i++ )
         g_pStateMgr->SetRaster( nullptr, i );

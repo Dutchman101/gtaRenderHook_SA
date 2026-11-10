@@ -118,7 +118,10 @@ cbuffer TemporalAA : register(b9)
     float MBEdgeScale;
     float MBCenterScale;
 }
-cbuffer Clouds : register( b10 )
+// b12 matches the slot CCloudRendering writes this block to. b10 carries the dynamic light array that
+// Deferred.hlsl declares, and the light pass rebinds that array mid frame, so a member read from b10 after
+// that point reads light data instead of this block.
+cbuffer Clouds : register( b12 )
 {
     float3 WindDir;
     float Time;

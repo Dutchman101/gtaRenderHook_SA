@@ -6,6 +6,7 @@
 #include "FastNoiseSIMD.h"
 #include "D3D1XStateManager.h"
 #include "D3D1XTextureMemoryManager.h"
+#include "CDebug.h"
 #include <game_sa\CWeather.h>
 #include "FullscreenQuad.h"
 #include "RwRenderEngine.h"
@@ -20,6 +21,7 @@ RwRaster *    CCloudRendering::m_pCloudsRaster         = nullptr;
 RwRaster *    CCloudRendering::m_pNoise3DRaster     = nullptr;
 CD3D1XConstantBuffer<CBCloudRendering> *CCloudRendering::m_pCloudRenderingCB =
     nullptr;
+CD3D1XConstantBuffer<CBWeatherState> *CCloudRendering::m_pWeatherCB = nullptr;
 bool                            CCloudRendering::m_bRequiresReloading = false;
 CloudRenderingSettingsBlock gCloudRenderingSettings;
 void CCloudRendering::Init()
@@ -40,6 +42,7 @@ void CCloudRendering::Init()
     GenerateCloudsTexture();
 
     m_pCloudRenderingCB = new CD3D1XConstantBuffer<CBCloudRendering>();
+    m_pWeatherCB        = new CD3D1XConstantBuffer<CBWeatherState>();
     gCloudRenderingSettings.m_aShaderPointers.push_back( m_pRenderCloudsPS );
     gCloudRenderingSettings.m_aShaderPointers.push_back(
         m_pVolumetricCombinePS );
@@ -49,6 +52,7 @@ void CCloudRendering::Init()
 void CCloudRendering::Shutdown()
 {
     delete m_pCloudRenderingCB;
+    delete m_pWeatherCB;
     delete m_pRenderCloudsPS;
     delete m_pVolumetricCombinePS;
     if ( m_pCloudsRaster )
@@ -59,15 +63,42 @@ void CCloudRendering::Shutdown()
     // The handles outlive this call, so they are cleared here rather than left set to memory that was just released. A
     // second shutdown then releases nothing, and the reload path sees the same absent handles it sees before setup.
     m_pCloudRenderingCB = nullptr;
+    m_pWeatherCB        = nullptr;
     m_pRenderCloudsPS   = nullptr;
     m_pVolumetricCombinePS = nullptr;
     m_pCloudsRaster     = nullptr;
     m_pNoise3DRaster    = nullptr;
 }
 
-void CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
-                                               RwRaster *from, RwRaster *to )
+void CCloudRendering::UpdateWeatherState()
 {
+    // The buffer is created in Init and cleared in Shutdown, and this runs from the render path, so the only
+    // way to arrive without one is a frame drawn inside that window. Leaving the last bound state alone there
+    // costs a frame of stale weather instead of a fault.
+    if ( m_pWeatherCB == nullptr )
+        return;
+
+    m_pWeatherCB->data.Foggyness = CWeather::Foggyness;
+    m_pWeatherCB->data.Rain      = CWeather::Rain;
+    m_pWeatherCB->data.WetRoads  = CWeather::WetRoads;
+    m_pWeatherCB->data.Sandstorm = CWeather::Sandstorm;
+    m_pWeatherCB->Update();
+    // Bound once per frame from the start of the deferred output rather than from the cloud pass, because cloud
+    // rendering is a toggle and the weather terms also drive the deferred, reflection, atmosphere and volumetric
+    // passes. b11 is the register Globals.hlsl gives cbuffer WeatherState, and no other buffer uses it.
+    g_pStateMgr->SetConstantBufferPS( m_pWeatherCB, 11 );
+}
+
+void CCloudRendering::UpdateCloudState()
+{
+    // Written once per frame from the top of the deferred output rather than from the cloud pass, because Time
+    // drives the ambient-occlusion dither, the shadow noise, the volumetric drift, the water clock and the
+    // final-pass noise, and cloud rendering is a toggle. Bound only from the cloud pass, this block stayed
+    // unwritten on every frame the toggle was off and every one of those animations stopped. b12 is the
+    // register Globals.hlsl gives cbuffer Clouds, and no other buffer uses it.
+    if ( m_pCloudRenderingCB == nullptr )
+        return;
+
     m_pCloudRenderingCB->data.CloudCoverage = CWeather::CloudCoverage;
     m_pCloudRenderingCB->data.CloudsColor[0] =
         CTimeCycle::m_CurrentColours.m_nFluffyCloudsBottomRed / 255.0f;
@@ -96,7 +127,36 @@ void CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
     
     m_pCloudRenderingCB->Update();
 
-    g_pStateMgr->SetConstantBufferPS( m_pCloudRenderingCB, 10 );
+    g_pStateMgr->SetConstantBufferPS( m_pCloudRenderingCB, 12 );
+}
+
+bool CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
+                                               RwRaster *from, RwRaster *to )
+{
+    // The caller blits this pass's target unconditionally, so it adopts that target only when this returns
+    // true. Reporting the refusal leaves the caller on the pass that wrote its output this frame. Both rasters
+    // and both shaders are created in Init, and a creation that fails leaves its handle null for the rest of
+    // the session, so every handle the draws below dereference is checked here and a success verdict means
+    // this pass wrote its target. A shader that failed to compile keeps its object but binds no stage, and a
+    // draw with no pixel shader writes nothing, so the compile result is checked for the same reason. The
+    // cloud constant buffer is not checked because UpdateCloudState owns it.
+    if ( m_pCloudsRaster == nullptr || m_pNoise3DRaster == nullptr ||
+         m_pRenderCloudsPS == nullptr || m_pVolumetricCombinePS == nullptr ||
+         !m_pRenderCloudsPS->IsValid() || !m_pVolumetricCombinePS->IsValid() )
+    {
+        // Each reason leads somewhere different, so each one names itself instead of sharing one message that
+        // would read as covering the rest. printError keeps one line per distinct message per run, so a
+        // resource that was never created does not repeat every frame.
+        if ( m_pCloudsRaster == nullptr )
+            g_pDebug->printError( "Cloud pass skipped: the cloud raster was not created." );
+        else if ( m_pNoise3DRaster == nullptr )
+            g_pDebug->printError( "Cloud pass skipped: the noise texture was not created." );
+        else if ( m_pRenderCloudsPS == nullptr || m_pVolumetricCombinePS == nullptr )
+            g_pDebug->printError( "Cloud pass skipped: a cloud shader object is absent." );
+        else
+            g_pDebug->printError( "Cloud pass skipped: a cloud shader did not compile." );
+        return false;
+    }
     // First render all volumetric lighting(sun light, volume streetlights,
     // clouds etc.)
     g_pRwCustomEngine->SetRenderTargets( &m_pCloudsRaster, nullptr, 1 );
@@ -121,6 +181,8 @@ void CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
     g_pStateMgr->SetRaster( nullptr, 1 );
     g_pStateMgr->SetRaster( nullptr, 2 );
     g_pStateMgr->SetRaster( nullptr, 3 );
+
+    return true;
 }
 
 void CCloudRendering::QueueTextureReload() {
