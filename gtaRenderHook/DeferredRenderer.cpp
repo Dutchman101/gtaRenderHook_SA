@@ -188,10 +188,10 @@ void CDeferredRenderer::RenderOutput()
         m_bFinalRasterHistoryInvalid = false;
     }
 
-    // The sun, point light, reflection, final, atmosphere and volumetric shaders all read weather, and five of
-    // them also read the cloud block's Time, so both buffers are written here, ahead of the first of those
-    // passes and outside the cloud-render toggle that used to be their only source. b11 is where Globals.hlsl
-    // declares cbuffer WeatherState and b12 where it declares cbuffer Clouds.
+    // Both blocks are written once per frame here rather than from the cloud pass, because the cloud pass sits
+    // behind a toggle and a flavour shader set can read either block from a pass that runs while the toggle is
+    // off. This tree declares WeatherState at b11 and Clouds at b12; a set that declares neither reads neither,
+    // so writing them costs two uploads and two slot writes per frame and alters no other slot.
     CCloudRendering::UpdateWeatherState();
     CCloudRendering::UpdateCloudState();
 

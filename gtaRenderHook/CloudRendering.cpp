@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include <algorithm>
+#include <cstdio>
 #include "CloudRendering.h"
 #include "D3D1X3DTexture.h"
 #include "D3D1XShader.h"
@@ -14,6 +16,61 @@
 #include <game_sa\CTimeCycle.h>
 #include <game_sa\CTimer.h>
 #include "D3DRenderer.h"
+#include "LightManager.h"
+
+namespace
+{
+// The engine keeps these terms in 0..1 and the shaders multiply them by fixed coefficents, so a value
+// outside that range arrives as a density nothing downstream bounds: the atmosphere density alone is 3.0 plus
+// sandstorm times 7. One rule for all of them keeps them from drifting apart.
+constexpr float kMinUnitRange = 0.0f;
+constexpr float kMaxUnitRange = 1.0f;
+
+// A term outside the range the shaders were written for, including one that is not a number.
+template <typename T> bool IsOutOfUnitRange( T value )
+{
+    const auto asFloat = static_cast<float>( value );
+    return !( asFloat >= kMinUnitRange && asFloat <= kMaxUnitRange );
+}
+
+template <typename T> float ClampUnit( T value )
+{
+    const auto asFloat = static_cast<float>( value );
+    // A value that is not a number fails both comparisons and std::clamp would pass it straight through,
+    // so it is mapped to the low end here rather than reaching the buffer as something that is not a number.
+    if ( !( asFloat >= kMinUnitRange ) )
+        return kMinUnitRange;
+    return std::clamp( asFloat, kMinUnitRange, kMaxUnitRange );
+}
+
+// One flag per term, because each term leaving the range is its own broken state and a flag over the whole
+// group would let whichever term went out first hide the rest.
+bool g_bReportedWeatherFoggyness = false;
+bool g_bReportedWeatherRain      = false;
+bool g_bReportedWeatherWetRoads  = false;
+bool g_bReportedWeatherSandstorm = false;
+bool g_bReportedCloudCoverage    = false;
+
+// Bounds one term into 0..1 and reports the first time the value it was handed was outside that range, naming
+// both the value received and the value served. It returns what the caller must store, so the buffer always
+// holds the value the report named. The flag is tested before the message is built, so a caller that runs
+// every frame allocates nothing in the steady state, and it is set before the report so a report that fails
+// cannot repeat every frame.
+template <typename T>
+float ClampUnitOnce( bool &alreadyReported, const char *block, const char *term, T value )
+{
+    const float bounded = ClampUnit( value );
+    if ( IsOutOfUnitRange( value ) && !alreadyReported )
+    {
+        alreadyReported = true;
+        char message[128] = {};
+        std::snprintf( message, sizeof( message ), "%s: %s=%.9g is outside 0..1, served %.9g.", block, term,
+                       static_cast<double>( value ), static_cast<double>( bounded ) );
+        g_pDebug->printError( message );
+    }
+    return bounded;
+}
+} // namespace
 
 CD3D1XShader *CCloudRendering::m_pRenderCloudsPS         = nullptr;
 CD3D1XShader *CCloudRendering::m_pVolumetricCombinePS          = nullptr;
@@ -78,28 +135,36 @@ void CCloudRendering::UpdateWeatherState()
     if ( m_pWeatherCB == nullptr )
         return;
 
-    m_pWeatherCB->data.Foggyness = CWeather::Foggyness;
-    m_pWeatherCB->data.Rain      = CWeather::Rain;
-    m_pWeatherCB->data.WetRoads  = CWeather::WetRoads;
-    m_pWeatherCB->data.Sandstorm = CWeather::Sandstorm;
+    m_pWeatherCB->data.Foggyness =
+        ClampUnitOnce( g_bReportedWeatherFoggyness, "Weather block", "Foggyness", CWeather::Foggyness );
+    m_pWeatherCB->data.Rain =
+        ClampUnitOnce( g_bReportedWeatherRain, "Weather block", "Rain", CWeather::Rain );
+    m_pWeatherCB->data.WetRoads =
+        ClampUnitOnce( g_bReportedWeatherWetRoads, "Weather block", "WetRoads", CWeather::WetRoads );
+    m_pWeatherCB->data.Sandstorm =
+        ClampUnitOnce( g_bReportedWeatherSandstorm, "Weather block", "Sandstorm", CWeather::Sandstorm );
     m_pWeatherCB->Update();
-    // Bound once per frame from the start of the deferred output rather than from the cloud pass, because cloud
-    // rendering is a toggle and the weather terms also drive the deferred, reflection, atmosphere and volumetric
-    // passes. b11 is the register Globals.hlsl gives cbuffer WeatherState, and no other buffer uses it.
+    // Bound once per frame from the start of the deferred output rather than from the cloud pass, so that a
+    // flavour shader set reading these terms in any later pass sees the current frame's values. This tree
+    // declares the block and reads none of it, so here the binding changes nothing. b11 is the register
+    // Globals.hlsl gives cbuffer WeatherState, and no other buffer uses it.
     g_pStateMgr->SetConstantBufferPS( m_pWeatherCB, 11 );
 }
 
 void CCloudRendering::UpdateCloudState()
 {
-    // Written once per frame from the top of the deferred output rather than from the cloud pass, because Time
-    // drives the ambient-occlusion dither, the shadow noise, the volumetric drift, the water clock and the
-    // final-pass noise, and cloud rendering is a toggle. Bound only from the cloud pass, this block stayed
-    // unwritten on every frame the toggle was off and every one of those animations stopped. b12 is the
-    // register Globals.hlsl gives cbuffer Clouds, and no other buffer uses it.
+    // Written once per frame from the top of the deferred output rather than from the cloud pass, because the
+    // cloud pass sits behind a toggle and a flavour shader set can read members of this block from a pass that
+    // runs while the toggle is off. This tree reads the block only from the cloud pass, so the write is inert
+    // here. b12 is the register Globals.hlsl gives cbuffer Clouds, and the cloud pass also binds the same block
+    // to b10 for sets that declare that slot.
     if ( m_pCloudRenderingCB == nullptr )
         return;
 
-    m_pCloudRenderingCB->data.CloudCoverage = CWeather::CloudCoverage;
+    // The cloud shader picks its noise exponent with lerp(45, 0.5, CloudCoverage), so this term has to stay
+    // inside the 0..1 that remap was written for.
+    m_pCloudRenderingCB->data.CloudCoverage =
+        ClampUnitOnce( g_bReportedCloudCoverage, "Cloud block", "CloudCoverage", CWeather::CloudCoverage );
     m_pCloudRenderingCB->data.CloudsColor[0] =
         CTimeCycle::m_CurrentColours.m_nFluffyCloudsBottomRed / 255.0f;
     m_pCloudRenderingCB->data.CloudsColor[1] =
@@ -114,6 +179,9 @@ void CCloudRendering::UpdateCloudState()
         gCloudRenderingSettings.GetFloat( "CloudEndHeight" );
     m_pCloudRenderingCB->data.CloudSpeed =
         gCloudRenderingSettings.GetFloat( "CloudSpeed" );
+    // The two layer heights are configuration, not engine state: this buffer carries them verbatim. A tree that
+    // divides by their separation and a tree that reads them as an animation-phase offset both get the configured
+    // value, and neither is rewritten here.
     
     m_pCloudRenderingCB->data.WindDirX = CWeather::WindDir.x;
     m_pCloudRenderingCB->data.WindDirY = CWeather::WindDir.y;
@@ -139,7 +207,9 @@ bool CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
     // the session, so every handle the draws below dereference is checked here and a success verdict means
     // this pass wrote its target. A shader that failed to compile keeps its object but binds no stage, and a
     // draw with no pixel shader writes nothing, so the compile result is checked for the same reason. The
-    // cloud constant buffer is not checked because UpdateCloudState owns it.
+    // cloud constant buffer is left out of this gate because UpdateCloudState owns it. The bind below guards it
+    // on its own, and Init creates it alongside the rasters this gate already checks, so it is present whenever
+    // the gate passes.
     if ( m_pCloudsRaster == nullptr || m_pNoise3DRaster == nullptr ||
          m_pRenderCloudsPS == nullptr || m_pVolumetricCombinePS == nullptr ||
          !m_pRenderCloudsPS->IsValid() || !m_pVolumetricCombinePS->IsValid() )
@@ -157,6 +227,13 @@ bool CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
             g_pDebug->printError( "Cloud pass skipped: a cloud shader did not compile." );
         return false;
     }
+    // A shader set that declares cbuffer Clouds at b10 reads b10 during this pass. Binding both slots here is
+    // what keeps the register change additive: a set that reads b12 reads b12, a set that reads b10 reads b10,
+    // and neither reads the light array, which the light pass binds to b10 earlier in the frame. It is one
+    // buffer uploaded once, so offering it on the second bank and putting that bank back afterwards costs two
+    // slot writes and no bandwidth.
+    if ( m_pCloudRenderingCB != nullptr )
+        g_pStateMgr->SetConstantBufferPS( m_pCloudRenderingCB, 10 );
     // First render all volumetric lighting(sun light, volume streetlights,
     // clouds etc.)
     g_pRwCustomEngine->SetRenderTargets( &m_pCloudsRaster, nullptr, 1 );
@@ -181,6 +258,13 @@ bool CCloudRendering::RenderVolumetricEffects( RwRaster *normalsDepth,
     g_pStateMgr->SetRaster( nullptr, 1 );
     g_pStateMgr->SetRaster( nullptr, 2 );
     g_pStateMgr->SetRaster( nullptr, 3 );
+
+    // b10 goes back to the light array it held before this pass, so a shader set that reads that bank anywhere
+    // else in the frame sees what it saw before the cloud block was offered there. The light buffer is created
+    // in CLightManager::Init and cleared in Shutdown, so an absent one simply leaves the bank as it is.
+    auto light_buffer = CLightManager::GetBuffer();
+    if ( light_buffer != nullptr )
+        g_pStateMgr->SetConstantBufferPS( light_buffer, 10 );
 
     return true;
 }

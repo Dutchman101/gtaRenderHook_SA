@@ -120,7 +120,9 @@ cbuffer TemporalAA : register(b9)
 }
 // b12 matches the slot CCloudRendering writes this block to. b10 carries the dynamic light array that
 // Deferred.hlsl declares, and the light pass rebinds that array mid frame, so a member read from b10 after
-// that point reads light data instead of this block.
+// that point reads light data instead of this block. The cloud pass also binds this block to b10, which is
+// what a shader set declaring this block at b10 reads. Those entry points declare no other buffer on that
+// bank, so the extra binding is invisible to a set that reads b12.
 cbuffer Clouds : register( b12 )
 {
     float3 WindDir;
@@ -131,6 +133,16 @@ cbuffer Clouds : register( b12 )
     float CloudEndHeight;
     float CloudCoverage;
     float CloudSpeed;
+}
+// Engine weather, written by CCloudRendering::UpdateWeatherState and normalised to 0..1. It is an offering
+// rather than a requirement: a shader set that does not declare this block is unaffected by it, which is why
+// the register has to stay clear of every bank the rest of the tree uses. Nothing else here uses b11.
+cbuffer WeatherState : register(b11)
+{
+    float WeatherFoggyness;
+    float WeatherRain;
+    float WeatherWetRoads;
+    float WeatherSandstorm;
 }
 static const float voxelGridScale2 = 1.0f;
 static const int	voxelGridSize = 32;
