@@ -519,65 +519,6 @@ void CSAIdleHook::RenderRealTimeShadows( const RwV3d &sundir )
     g_pDebug->printMsg( "Shadow Pass: end", 1 );
 }
 
-void RenderEntity2dfx( CEntity* e ) { }
-
-void* CreateEntity2dfx( void* e )
-{
-    return reinterpret_cast<void*>( 0xC3EF84 );
-}
-
-
-void CopyViewMatrix( RwMatrix* viewTransformRef, RwFrame* camframe )
-{
-    RwMatrixInvert( viewTransformRef, RwFrameGetLTM( camframe ) );
-    viewTransformRef->right.x = -viewTransformRef->right.x;
-    viewTransformRef->up.x = -viewTransformRef->up.x;
-    viewTransformRef->at.x = -viewTransformRef->at.x;
-    viewTransformRef->pos.x = -viewTransformRef->pos.x;
-    viewTransformRef->flags = 0;
-    viewTransformRef->pad1 = 0;
-    viewTransformRef->pad2 = 0;
-    viewTransformRef->pad3 = 0x3F800000;
-}
-//typedef std::chrono::high_resolution_clock hr_clock;
-
-void CSAIdleHook::RenderVoxelGI()
-{
-    // The first call below reads the voxel camera, and initialisation can stop before it exists, so a pass that has no
-    // camera to move over the player ends here instead of reading through it.
-    if ( CVoxelOctreeRenderer::m_pVoxelCamera == nullptr )
-        return;
-    // The same reason as above: the camera handle can exist while the frame it is driven through was never created,
-    // and the translate call below is made through that frame.
-    auto s_cam_frame = RwCameraGetFrame( CVoxelOctreeRenderer::m_pVoxelCamera );
-    if ( s_cam_frame == nullptr )
-        return;
-    auto campos = RwMatrixGetPos( RwFrameGetMatrix( RwCameraGetFrame( Scene.m_pRwCamera ) ) );
-    /*if (FindPlayerPos(&cpos, 0) == nullptr)
-        Campos = RwMatrixGetPos(RwFrameGetMatrix(RwCameraGetFrame(Scene.curCamera)));
-    else
-        Campos = &cpos;*/
-    RwFrameTranslate( s_cam_frame, campos, rwCOMBINEREPLACE );
-    //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATECULLMODE, rwCULLMODECULLNONE);
-    CVoxelOctreeRenderer::CleanVoxelOctree();
-
-    for ( int i = 1; i <= CVoxelOctreeRenderer::voxelLodCount; i++ )
-    {
-        m_uiDeferredStage = 3;
-        CVoxelOctreeRenderer::SetVoxelLODSize( i );
-        CVoxelOctreeRenderer::RenderToVoxelOctree( RenderDeferred, i );
-
-        g_pDeferredRenderer->m_pShadowRenderer->SetShadowBuffer();
-        CLightManager::SortByDistance( *campos );
-
-        m_uiDeferredStage = 4;
-        CVoxelOctreeRenderer::InjectRadiance( g_pDeferredRenderer->m_pShadowRenderer->m_pShadowCamera->zBuffer, CRendererRH::RenderTOBJs, i - 1 );
-        g_pDeferredRenderer->m_pShadowRenderer->UnsetShadowBuffer();
-
-    }
-    CVoxelOctreeRenderer::FilterVoxelOctree();
-}
-
 void CSAIdleHook::PrepareRenderStuff()
 {
     RwV2d mousePos;

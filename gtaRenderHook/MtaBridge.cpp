@@ -715,6 +715,17 @@ bool CMtaBridge::DrawAndPresent()
     if ( bSrgbTextureRestorable )
         m_pDevice9->SetSamplerState( 0, D3DSAMP_SRGBTEXTURE, FALSE );
 
+    // The same colour correction turns on the sRGB write when it is on, and that pair is one setting: the
+    // read side decodes on the way in and the write side encodes on the way out. Clearing only the read
+    // side would leave the frame encoded a second time on its way into the back buffer, which no longer
+    // matches what the engine produced, so the write side is saved and cleared with it and put back after
+    // the draw. This device is shared with the interface code, so the previous value is read rather than
+    // assumed, the same way the sampler above is handled.
+    DWORD previousSrgbWrite = FALSE;
+    const bool bSrgbWriteRestorable = SUCCEEDED( m_pDevice9->GetRenderState( D3DRS_SRGBWRITEENABLE, &previousSrgbWrite ) );
+    if ( bSrgbWriteRestorable )
+        m_pDevice9->SetRenderState( D3DRS_SRGBWRITEENABLE, FALSE );
+
     m_pDevice9->SetTexture( 0, m_pTexture9 );
 
     // Half pixel offset lands on pixel centres, and the quad covers the frame size unscaled.
@@ -731,6 +742,8 @@ bool CMtaBridge::DrawAndPresent()
     m_pDevice9->SetTexture( 0, nullptr );
     if ( bSrgbTextureRestorable )
         m_pDevice9->SetSamplerState( 0, D3DSAMP_SRGBTEXTURE, previousSrgbTexture );
+    if ( bSrgbWriteRestorable )
+        m_pDevice9->SetRenderState( D3DRS_SRGBWRITEENABLE, previousSrgbWrite );
     m_pDevice9->EndScene();
 
     // Present runs MTA's handler, which raises the post frame pulse and draws the interface over the image.

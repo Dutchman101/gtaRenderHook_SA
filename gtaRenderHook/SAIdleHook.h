@@ -72,18 +72,10 @@ public:
         Patches game memory, used to inject RenderHook methods in game.
     */
     static void Patch();
-    /// Rendering on separate thread experiments, currently useless
-    static void GameLoop();
-    static void RenderLoop();
-    static void UpdateLoop();
     /*!
         Idle method, responsible for everything in game from rendering to gameplay update
     */
     static void Idle( void *Data );
-    /*!
-        Experimental Voxel Global Illumination rendering(currently disabled)
-    */
-    static void RenderVoxelGI();
     /*!
         Renders all shadow objects to cascade shadow buffer for specified light direction
     */
@@ -158,9 +150,5 @@ public:
     static void RenderInGame();
 
     static float m_fShadowDNBalance;
-    static int m_nLastCascadeRenderCount;
-private:
-    static std::thread renderThread;
-    static std::thread updateThread;
 };
 

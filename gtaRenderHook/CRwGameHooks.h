@@ -57,7 +57,10 @@ public:
 
     //static void InitRW();
     //static void ShutdownRW();
-    static void InitGamma( void *p );
+    // The game reaches this as CGamma's constructor, so the object arrives in ecx and nothing is pushed.
+    // Fastcall is what reads that register; the second parameter is the register fastcall reserves and
+    // the game never passes, so it is left unnamed.
+    static void __fastcall InitGamma( void *pGamma, void * );
     static CRwPointerTable ms_rwPointerTableSA;
 };
 

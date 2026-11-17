@@ -143,9 +143,39 @@ void CRwGameHooks::Im3DOpen()
 {
 }
 
-void CRwGameHooks::InitGamma( void *p )
+void __fastcall CRwGameHooks::InitGamma( void *pGamma, void * )
 {
-    UNREFERENCED_PARAMETER( p );
+    // The game's CGamma constructor writes the object's four fields, and the game's own gamma function reads the
+    // first of them as an on switch: it applies nothing while that field is clear. A hook that returns without
+    // writing them leaves the object at zero, so that switch stays clear and no display gamma is ever applied.
+    // The four writes below are the constructor's own, decoded from the retail executable at 0x00747180. The two
+    // level fields start at the values the game's curve code compares against to decide that no target has been
+    // set yet.
+    //
+    // The display cap query that follows those writes is deliberately not reproduced: it takes a Direct3D
+    // interface through the path this renderer replaced, and it only clears the first field again on a device
+    // that reports no gamma support.
+    struct CGammaFields
+    {
+        int   m_nEnabled;        // +0x00
+        float m_fCurrentLevel;   // +0x04
+        float m_fTargetLevel;    // +0x08
+        float m_fPrevLevel;      // +0x0C
+    };
+    // The offsets are the game's, not this file's, so the compiler is made to keep them here rather than
+    // trusted to. A field inserted above, or two fields swapped, changes what the writes below mean while
+    // still building, and this is what stops that.
+    static_assert( sizeof( CGammaFields ) == 0x10, "CGamma block size changed" );
+    static_assert( offsetof( CGammaFields, m_nEnabled ) == 0x00, "CGamma on switch moved" );
+    static_assert( offsetof( CGammaFields, m_fCurrentLevel ) == 0x04, "CGamma current level moved" );
+    static_assert( offsetof( CGammaFields, m_fTargetLevel ) == 0x08, "CGamma target level moved" );
+    static_assert( offsetof( CGammaFields, m_fPrevLevel ) == 0x0C, "CGamma previous level moved" );
+
+    CGammaFields* pFields = static_cast<CGammaFields*>( pGamma );
+    pFields->m_nEnabled = 1;                // mov dword ptr [esi], 1
+    pFields->m_fCurrentLevel = 0.5f;        // mov dword ptr [esi+4], 0x3F000000
+    pFields->m_fTargetLevel = -1000.0f;     // mov dword ptr [esi+8], 0xC47A0000
+    pFields->m_fPrevLevel = 1000.0f;        // mov dword ptr [esi+C], 0x447A0000
 }
 
 RwBool CRwGameHooks::Im3DSubmit()
