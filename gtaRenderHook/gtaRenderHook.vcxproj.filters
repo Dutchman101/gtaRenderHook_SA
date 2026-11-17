@@ -125,6 +125,9 @@
     <ClInclude Include="D3DRenderer.h">
       <Filter>Source\RwRenderEngine\RwD3DRenderEngine</Filter>
     </ClInclude>
+    <ClInclude Include="MtaBridge.h">
+      <Filter>Source\RwRenderEngine\RwD3DRenderEngine</Filter>
+    </ClInclude>
     <ClInclude Include="D3D1XIm2DPipeline.h">
       <Filter>Source\RwRenderEngine\RwD3DRenderEngine\RwPipelines</Filter>
     </ClInclude>
@@ -359,6 +362,9 @@
       <Filter>Source\RwRenderEngine</Filter>
     </ClCompile>
     <ClCompile Include="D3DRenderer.cpp">
+      <Filter>Source\RwRenderEngine\RwD3DRenderEngine</Filter>
+    </ClCompile>
+    <ClCompile Include="MtaBridge.cpp">
       <Filter>Source\RwRenderEngine\RwD3DRenderEngine</Filter>
     </ClCompile>
     <ClCompile Include="D3D1XIm2DPipeline.cpp">
