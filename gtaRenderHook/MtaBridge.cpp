@@ -118,23 +118,16 @@ void CMtaBridge::Shutdown()
 
 bool CMtaBridge::CreateD3D9Device()
 {
-    // Resolved rather than imported, so the address is the one the process uses. MTA replaces this
-    // export, so the call returns its factory. Only if the module is already loaded, else unreplaced.
-    bool bModuleWasPresent = true;
+    // The export is only the host's when its module is already loaded, and loading it here cannot make it so.
     HMODULE hD3D9 = GetModuleHandleA( "d3d9.dll" );
     if ( hD3D9 == nullptr )
     {
-        bModuleWasPresent = false;
-        hD3D9 = LoadLibraryA( "d3d9.dll" );
-    }
-    if ( hD3D9 == nullptr )
-    {
-        g_pDebug->printError( "MTA bridge: d3d9.dll could not be loaded" );
+        // The error call, not a debug message: that one is filtered out at the default debug level.
+        g_pDebug->printError( "MTA bridge: d3d9.dll was not loaded at device setup, so its export is the "
+                              "original one and no client interface attaches to the frame, presenting "
+                              "through the swap chain instead" );
         return false;
     }
-    if ( !bModuleWasPresent )
-        g_pDebug->printError( "MTA bridge: d3d9.dll was not loaded yet, so its export is the "
-                              "original one and no interface code will attach to the device" );
 
     typedef IDirect3D9* (WINAPI *PDirect3DCreate9)(UINT);
     PDirect3DCreate9 pCreate = reinterpret_cast<PDirect3DCreate9>( GetProcAddress( hD3D9, "Direct3DCreate9" ) );
