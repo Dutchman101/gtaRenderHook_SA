@@ -1,6 +1,7 @@
 #ifndef D3DRenderer_h__
 #define D3DRenderer_h__
 class CD3D1XStateManager;
+class CMtaBridge;
 class CD3DRenderer
 {
 public:
@@ -155,6 +156,8 @@ private:
     std::vector <IDXGIAdapter*>	m_vAdapters{};
     std::vector <DXGI_MODE_DESC>	m_vAdapterModes{};
     char					m_sAdapterInfo[80]{};
+    // Null unless MTA's 9 device exists, in which case that device presents and this renderer doesnt.
+    CMtaBridge*				m_pMtaBridge = nullptr;
 };
 
 #endif // D3DRenderer_h__

@@ -10,6 +10,7 @@
 #include "D3DSpecificHelpers.h"
 #include "CDebug.h"
 #include "RwD3D1XEngine.h"
+#include "MtaBridge.h"
 
 CD3DRenderer::CD3DRenderer( HWND& window )
 {
@@ -89,6 +90,14 @@ CD3DRenderer::CD3DRenderer( HWND& window )
 
 CD3DRenderer::~CD3DRenderer()
 {
+    // Safety net for a renderer destroyed without going through DeInitDevice.
+    if ( m_pMtaBridge )
+    {
+        m_pMtaBridge->Shutdown();
+        delete m_pMtaBridge;
+        m_pMtaBridge = nullptr;
+    }
+
     for ( auto pAdapter : m_vAdapters )
         pAdapter->Release();
     if ( m_pdxgiFactory )
@@ -180,7 +189,7 @@ bool CD3DRenderer::InitDevice()
         m_driverType = driverTypes[driverTypeIndex];
         hr = D3D11CreateDevice( m_driverType == D3D_DRIVER_TYPE_HARDWARE ? nullptr : currentAdapter, m_driverType, nullptr, createDeviceFlags, featureLevels, numFeatureLevels,
                                 D3D11_SDK_VERSION, &m_pd3dDevice, &m_featureLevel, &m_pImmediateContext );
-        // if we failed to create device with invalid arg error, 
+        // if we failed to create device with invalid arg error,
         // probably it's because current feature level is not supported by GPU,
         // so we will try to find supported feature level set
         if ( hr == E_INVALIDARG )
@@ -210,7 +219,7 @@ bool CD3DRenderer::InitDevice()
     // Query debug interface
     m_pd3dDevice->QueryInterface( __uuidof( ID3D11Debug ), (void**)&m_pDebug );
 
-    // Create swap chain for device.  
+    // Create swap chain for device.
     IDXGIFactory2* dxgiFactory2 = nullptr;
     m_pdxgiFactory->QueryInterface( __uuidof( IDXGIFactory2 ), reinterpret_cast<void**>( &dxgiFactory2 ) );
     if ( dxgiFactory2 )
@@ -262,6 +271,20 @@ bool CD3DRenderer::InitDevice()
         sd.Flags = isWindowed ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH : 0;
         CALL_D3D_API( m_pdxgiFactory->CreateSwapChain( m_pd3dDevice, &sd, &m_pSwapChain ), "Failed to create swap chain using DX11 API" );
     }
+
+    // MTA hooks the d3d9.dll factory export, so this device is the one it attaches to and flips the
+    // window with. If creation fails the chain presents on its own, so the frame still gets there.
+    if ( m_pMtaBridge )
+    {
+        m_pMtaBridge->Shutdown();
+        delete m_pMtaBridge;
+        m_pMtaBridge = nullptr;
+    }
+
+    // Kept even when it couldnt present, since it may already hold the 9 device MTA is using.
+    m_pMtaBridge = new CMtaBridge();
+    m_pMtaBridge->Init( m_pd3dDevice, m_pImmediateContext, m_pSwapChain, m_hWnd );
+
     g_pDebug->printMsg( "Device initialization: end", 1 );
 
     return true;
@@ -269,6 +292,14 @@ bool CD3DRenderer::InitDevice()
 
 void CD3DRenderer::DeInitDevice()
 {
+    // Torn down before the objects it was built from are released.
+    if ( m_pMtaBridge )
+    {
+        m_pMtaBridge->Shutdown();
+        delete m_pMtaBridge;
+        m_pMtaBridge = nullptr;
+    }
+
     if ( m_pImmediateContext )
     {
         m_pImmediateContext->ClearState();
@@ -414,6 +445,13 @@ void CD3DRenderer::Clear( RwCamera *camera, RwRGBA& color, RwInt32 flags )
 
 void CD3DRenderer::Present( bool VSync )
 {
+    // Once MTA's device exists it owns the frame: copy, present, then its interface draw.
+    if ( m_pMtaBridge != nullptr && m_pMtaBridge->IsActive() )
+    {
+        if ( m_pMtaBridge->Composite( VSync ) )
+            return;
+    }
+
     m_pSwapChain->Present( VSync ? 1 : 0, 0 );
 }
 

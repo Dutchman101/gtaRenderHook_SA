@@ -174,6 +174,7 @@
     <ClInclude Include="D3D1XVertexDeclaration.h" />
     <ClInclude Include="D3D1XVertexDeclarationManager.h" />
     <ClInclude Include="D3DRenderer.h" />
+    <ClInclude Include="MtaBridge.h" />
     <ClInclude Include="D3DSpecificHelpers.h" />
     <ClInclude Include="DebugBBox.h" />
     <ClInclude Include="DebugLine.h" />
@@ -263,6 +264,7 @@
     <ClCompile Include="D3D1XVertexDeclaration.cpp" />
     <ClCompile Include="D3D1XVertexDeclarationManager.cpp" />
     <ClCompile Include="D3DRenderer.cpp" />
+    <ClCompile Include="MtaBridge.cpp" />
     <ClCompile Include="DebugBBox.cpp" />
     <ClCompile Include="DebugLine.cpp" />
     <ClCompile Include="DebugRendering.cpp" />
