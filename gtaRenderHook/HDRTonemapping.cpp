@@ -146,15 +146,15 @@ void TonemapSettingsBlock::InitGUI( TwBar * bar )
 
 static float GetDayNightBalance()
 {
-    // The game keeps this balance at a fixed address, and the two callers below use it as the weight
-    // between the day and night stops of an exposure value that multiplies every pixel. The game writes
-    // it inside that range, so a value outside it means something else wrote the same address, and
-    // holding it to the stops keeps such a value from moving exposure off both of them.
+    // The weight between the day and night stops of an exposure value that multiplies every pixel. This
+    // render loop publishes it from the game clock, so it stays inside the range the stops were chosen
+    // for; the clamp is kept for anything else that writes the same address, such as the game's vision
+    // effect, because a value outside the range would move exposure off both stops.
     // It is clamped rather than refused: a refusal has to return one of the stops, and returning the day
     // stop for a value just past the night stop would flip the frame from night to day exposure, which is
     // the opposite of what that value asked for. A value that is not a number fails the first comparison,
     // which is the only case with no stop to move toward, so it takes the day stop.
-    const float fBalance = *(float*)( 0x8D12C0 );
+    const float fBalance = *(float*)( GAME_DAY_NIGHT_BALANCE_ADDR );
     if ( !( fBalance >= 0.0f ) )
         return 0.0f;
     if ( fBalance > 1.0f )

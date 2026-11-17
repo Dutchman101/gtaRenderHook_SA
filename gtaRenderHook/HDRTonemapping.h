@@ -9,6 +9,10 @@ class CD3D1XShader;
 constexpr auto NUM_TONEMAP_TEXTURES =
     3; // Number of stages in the 3x3 down-scaling for post-processing in PS
 static const int ToneMappingTexSize = (int)pow( 3.0f, NUM_TONEMAP_TEXTURES - 1 );
+// Address of the game's day/night blend weight, 0 for full day and 1 for full night. The game writes it
+// from its custom building renderer update, and a frame loop that replaces that update has to publish it
+// as well: every reader would otherwise keep the value it was initialised to, which is full night.
+constexpr auto GAME_DAY_NIGHT_BALANCE_ADDR = 0x8D12C0;
 struct CBPostProcess
 {
     float	LumWhite;

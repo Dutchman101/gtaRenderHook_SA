@@ -166,28 +166,29 @@ void CSAIdleHook::UpdateShadowDNBalance()
 {
     // TODO: make times adjustable perhaps?
     float currentMinutes = ( CClock::ms_nGameClockMinutes + 60.0f * CClock::ms_nGameClockHours ) + CClock::ms_nGameClockSeconds / 60.0f;
+    // Worked out first and stored once below, so every path leaves both values describing the same
+    // reading of the clock.
+    float fBalance;
     // if time is less than 7 am then it's night
     if ( currentMinutes < 360.0 )
-    {
-        m_fShadowDNBalance = 1.0;
-        return;
-    }
-    if ( currentMinutes < 420.0 )
-    {
-        m_fShadowDNBalance = ( 420.0f - currentMinutes ) / 60.0f;
-        return;
-    }
+        fBalance = 1.0f;
+    else if ( currentMinutes < 420.0 )
+        fBalance = ( 420.0f - currentMinutes ) / 60.0f;
     // if time is between 7 am and 7 pm than it's day
-    if ( currentMinutes < 1080.0 )
-    {
-        m_fShadowDNBalance = 0.0;
-        return;
-    }
+    else if ( currentMinutes < 1080.0 )
+        fBalance = 0.0f;
     // else it's night
-    if ( currentMinutes >= 1140.0 )
-        m_fShadowDNBalance = 1.0;
+    else if ( currentMinutes >= 1140.0 )
+        fBalance = 1.0f;
     else
-        m_fShadowDNBalance = 1.0f - ( 1140.0f - currentMinutes ) / 60.0f;
+        fBalance = 1.0f - ( 1140.0f - currentMinutes ) / 60.0f;
+
+    m_fShadowDNBalance = fBalance;
+    // The game's day/night blend weight is written by its custom building renderer update, and this loop
+    // replaces that update, so nothing else writes it while the game runs. Building colours, particles,
+    // skidmarks and the exposure of every pixel read it, and all of them would otherwise see the value it
+    // was initialised to, which is full night, for the whole session.
+    *(float*)( GAME_DAY_NIGHT_BALANCE_ADDR ) = fBalance;
 }
 
 // Render one game frame
