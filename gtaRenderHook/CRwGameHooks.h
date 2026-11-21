@@ -1,32 +1,34 @@
 #pragma once
+
+// Unsigned like MemoryFuncs.h, because a signed one cant hold a pointer at or above 0x80000000.
 struct CRwPointerTable
 {
     // Main render state-machine system
-    INT_PTR m_fpRenderSystem;
+    UINT_PTR m_fpRenderSystem;
     // Render state set/get funcs
-    INT_PTR m_fpSetRenderState;
-    INT_PTR m_fpGetRenderState;
-    INT_PTR m_fpSetRefreshRate;
-    INT_PTR m_fpSetVideoMode;
+    UINT_PTR m_fpSetRenderState;
+    UINT_PTR m_fpGetRenderState;
+    UINT_PTR m_fpSetRefreshRate;
+    UINT_PTR m_fpSetVideoMode;
     // Immediate 2D pointers
-    INT_PTR m_fpIm2DRenderPrim;
-    INT_PTR m_fpIm2DRenderIndexedPrim;
-    INT_PTR m_fpIm2DRenderLine;
+    UINT_PTR m_fpIm2DRenderPrim;
+    UINT_PTR m_fpIm2DRenderIndexedPrim;
+    UINT_PTR m_fpIm2DRenderLine;
     // Immediate 3D pointers
-    INT_PTR m_fpIm3DOpen;
-    INT_PTR m_fpIm3DSubmit;
+    UINT_PTR m_fpIm3DOpen;
+    UINT_PTR m_fpIm3DSubmit;
     // Default pipelines nodes and callbacks
-    INT_PTR m_fpAtomicAllInOneNode;
-    INT_PTR m_fpSkinAllInOneNode;
-    INT_PTR m_fpDefaultInstanceCallback;
+    UINT_PTR m_fpAtomicAllInOneNode;
+    UINT_PTR m_fpSkinAllInOneNode;
+    UINT_PTR m_fpDefaultInstanceCallback;
     // Renderware init/shutdown
     //INT_PTR m_fpInitRW;
     //INT_PTR m_fpShutdownRW;
     // Feature support checks
-    INT_PTR m_fpCheckNativeTextureSupport;
-    INT_PTR m_fpCheckEnviromentMapSupport;
+    UINT_PTR m_fpCheckNativeTextureSupport;
+    UINT_PTR m_fpCheckEnviromentMapSupport;
     // Game specific func?
-    INT_PTR m_fpInitGamma;
+    UINT_PTR m_fpInitGamma;
 };
 
 class CRwGameHooks

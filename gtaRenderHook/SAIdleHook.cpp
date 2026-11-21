@@ -43,14 +43,207 @@
 #include "FullscreenQuad.h"
 #include "CubemapReflectionRenderer.h"
 #include "TemporalAA.h"
+#include <type_traits>
+#include <atomic>
 //#include <game_sa\CGlass.h>
 //#include <game_sa\CSkidmarks.h>
 
 
 /* GTA Definitions TODO: Move somewhere else*/
 #define g_breakMan ((void *)0xBB4240)		// Break manager
-// default Idle method
-#define _Idle(ptr) ((void (__cdecl *)(void*))0x53E920)(ptr)
+constexpr UINT_PTR IDLE_FUNCTION_ADDRESS = 0x53E920;
+
+// Hook the entry, not a call site: a host that owns the message pump may call the function directly.
+constexpr SIZE_T IDLE_PROLOGUE_LENGTH = 16;
+
+// The first sixteen bytes of the idle entry, one instruction per line, read from gta_sa.exe.lst.
+static constexpr unsigned char g_aExpectedIdlePrologue[] =
+{
+    0x83, 0xEC, 0x08,               // sub esp, 8
+    0xE8, 0x58, 0x31, 0x02, 0x00,   // call CTimer::GetCurrentTimeInCycles (0x561A80)
+    0xE8, 0x13, 0x31, 0x02, 0x00,   // call CTimer::GetCyclesPerMillisecond (0x561A40)
+    0x56,                           // push esi
+    0x8B, 0xFF                      // two byte no-op that pads the branch target
+};
+
+// Sized by its own list, so a trimmed list fails here rather than padding with zeros.
+static_assert( sizeof( g_aExpectedIdlePrologue ) == IDLE_PROLOGUE_LENGTH,
+               "the tail report compares to the end of this list, so the list has to hold exactly the bytes the "
+               "length names" );
+
+// sub esp, imm8 is one opcode byte, one modrm byte and one immediate byte.
+constexpr UINT_PTR IDLE_SUB_ESP_OPCODE_LENGTH    = 1;
+constexpr UINT_PTR IDLE_SUB_ESP_MODRM_LENGTH     = 1;
+constexpr UINT_PTR IDLE_SUB_ESP_IMMEDIATE_LENGTH = 1;
+
+constexpr UINT_PTR IDLE_SUB_ESP_LENGTH =
+    IDLE_SUB_ESP_OPCODE_LENGTH + IDLE_SUB_ESP_MODRM_LENGTH + IDLE_SUB_ESP_IMMEDIATE_LENGTH;
+constexpr UINT_PTR IDLE_SUB_ESP_IMMEDIATE_OFFSET = IDLE_SUB_ESP_LENGTH - 1;
+
+// The assembler reads a bare identifier as a memory operand, so the immediate has to arrive as macro text.
+#define IDLE_SUB_ESP_ALLOCATION_IMM 8
+constexpr int IDLE_SUB_ESP_ALLOCATION = IDLE_SUB_ESP_ALLOCATION_IMM;
+
+static_assert( IDLE_SUB_ESP_ALLOCATION > 0 && IDLE_SUB_ESP_ALLOCATION <= 127,
+               "the replayed sub esp takes a signed eight bit immediate, so the allocation has to fit in one" );
+
+constexpr UINT_PTR IDLE_REPLAYED_LENGTH = IDLE_SUB_ESP_LENGTH + REL32_BRANCH_LENGTH;
+
+// The window runs to the end of the instruction the body resumes into: its operand chooses the callee.
+constexpr SIZE_T IDLE_VERIFIED_LENGTH = static_cast<SIZE_T>( IDLE_REPLAYED_LENGTH ) + REL32_BRANCH_LENGTH;
+
+constexpr UINT_PTR IDLE_RESUME_ADDRESS = IDLE_FUNCTION_ADDRESS + IDLE_REPLAYED_LENGTH;
+#define IDLE_RESUME_ADDRESS_IMM 0x53E928
+constexpr UINT_PTR IDLE_RESUME_ADDRESS_ASM = IDLE_RESUME_ADDRESS_IMM;
+
+static_assert( IDLE_RESUME_ADDRESS == IDLE_RESUME_ADDRESS_ASM,
+               "the instruction after the replayed call sits here in the listing, so the lengths above must "
+               "describe the instructions the trampoline actually replays" );
+static_assert( static_cast<UINT_PTR>( REL32_BRANCH_LENGTH ) <=
+                   IDLE_RESUME_ADDRESS_ASM - IDLE_FUNCTION_ADDRESS,
+               "the jump ends at or before the resume point, so it writes only the bytes the trampoline replays "
+               "itself and stops short of the instruction the game resumes at" );
+static_assert( g_aExpectedIdlePrologue[0] == 0x83 && g_aExpectedIdlePrologue[1] == 0xEC,
+               "the trampoline replays sub esp first, so these two bytes are not free to change" );
+static_assert( g_aExpectedIdlePrologue[IDLE_SUB_ESP_IMMEDIATE_OFFSET] == IDLE_SUB_ESP_ALLOCATION,
+               "the trampoline's sub esp must allocate what this byte encodes, or the resumed body reads its "
+               "argument from the wrong slot" );
+static_assert( g_aExpectedIdlePrologue[IDLE_SUB_ESP_LENGTH] == REL32_CALL_OPCODE,
+               "the replayed call starts where sub esp ends and its target is the operand after this byte, so "
+               "neither the length above nor this opcode can be wrong on its own" );
+static_assert( g_aExpectedIdlePrologue[IDLE_REPLAYED_LENGTH] == REL32_CALL_OPCODE,
+               "the trampoline resumes exactly where the replayed call ends, so the second call has to start "
+               "there or the resumed body is entered mid instruction" );
+
+// Unsigned add, so a backward call reaches its target by wrapping.
+constexpr UINT_PTR IDLE_INNER_CALL_DISPLACEMENT_OFFSET = IDLE_SUB_ESP_LENGTH + REL32_OPCODE_LENGTH;
+
+constexpr uint32_t IDLE_INNER_CALL_DISPLACEMENT =
+    static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_INNER_CALL_DISPLACEMENT_OFFSET] )
+    | ( static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_INNER_CALL_DISPLACEMENT_OFFSET + 1] ) << 8 )
+    | ( static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_INNER_CALL_DISPLACEMENT_OFFSET + 2] ) << 16 )
+    | ( static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_INNER_CALL_DISPLACEMENT_OFFSET + 3] ) << 24 );
+
+// Decoded from the pattern, so the target and the verified bytes cannot drift apart.
+constexpr UINT_PTR IDLE_INNER_CALL_IMM = 0x561A80;
+constexpr UINT_PTR IDLE_INNER_CALL = IDLE_RESUME_ADDRESS + IDLE_INNER_CALL_DISPLACEMENT;
+
+static_assert( IDLE_INNER_CALL == IDLE_INNER_CALL_IMM,
+               "the replayed call's operand has to decode to CTimer::GetCurrentTimeInCycles at .text:00561A80, so "
+               "those four bytes are not free to change and the trampoline cannot be aimed at another target" );
+
+constexpr UINT_PTR IDLE_CYCLES_PER_MS = 0x561A40;
+constexpr UINT_PTR IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET = IDLE_REPLAYED_LENGTH + REL32_OPCODE_LENGTH;
+
+constexpr uint32_t IDLE_CYCLES_PER_MS_DISPLACEMENT =
+    static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET] )
+    | ( static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET + 1] ) << 8 )
+    | ( static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET + 2] ) << 16 )
+    | ( static_cast<uint32_t>( g_aExpectedIdlePrologue[IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET + 3] ) << 24 );
+
+static_assert( IDLE_CYCLES_PER_MS ==
+                   IDLE_RESUME_ADDRESS + REL32_BRANCH_LENGTH + IDLE_CYCLES_PER_MS_DISPLACEMENT,
+               "the second call's operand has to decode to the function the listing names there, so those four "
+               "bytes are part of what identifies this body and are not free to change" );
+
+static_assert( IDLE_VERIFIED_LENGTH <= IDLE_PROLOGUE_LENGTH,
+               "the gate cannot ask more of the entry than the pattern it compares against describes" );
+static_assert( IDLE_VERIFIED_LENGTH < IDLE_PROLOGUE_LENGTH,
+               "the tail report compares from the end of the verified window to the end of the pattern, so the "
+               "pattern has to carry bytes past that window or the report has nothing to read and stops reporting "
+               "without any other check noticing" );
+static_assert( IDLE_VERIFIED_LENGTH == IDLE_REPLAYED_LENGTH + REL32_BRANCH_LENGTH,
+               "the window has to end with the instruction the body resumes into, so the operand that chooses that "
+               "call's callee is verified and not only its opcode" );
+
+// These three are pinned here because they carry no operand.
+static_assert( IDLE_PROLOGUE_LENGTH - IDLE_VERIFIED_LENGTH == 3,
+               "the three asserts below pin the whole tail the install tolerates, so a tail of any other length "
+               "would leave tolerated bytes that nothing describes" );
+static_assert( g_aExpectedIdlePrologue[IDLE_VERIFIED_LENGTH] == 0x56,
+               "the first tolerated byte is push esi, which carries no operand, so the tolerated tail begins with "
+               "an instruction that cannot aim the body anywhere" );
+static_assert( g_aExpectedIdlePrologue[IDLE_VERIFIED_LENGTH + 1] == 0x8B &&
+                   g_aExpectedIdlePrologue[IDLE_VERIFIED_LENGTH + 2] == 0xFF,
+               "the last two tolerated bytes are the two byte no-op that pads the branch target, and a pattern "
+               "that put an instruction with an operand here would be tolerating bytes able to redirect the body" );
+
+static_assert( IDLE_INNER_CALL_DISPLACEMENT_OFFSET + static_cast<UINT_PTR>( sizeof( uint32_t ) ) <=
+                   IDLE_PROLOGUE_LENGTH,
+               "this decode reads four bytes from the pattern, so all four have to lie inside it" );
+static_assert( IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET + static_cast<UINT_PTR>( sizeof( uint32_t ) ) <=
+                   IDLE_PROLOGUE_LENGTH,
+               "this decode reads four bytes from the pattern, so all four have to lie inside it" );
+
+// Patch() compares only the first IDLE_VERIFIED_LENGTH bytes, so this is the assert that fails if the window narrows.
+static_assert( IDLE_CYCLES_PER_MS_DISPLACEMENT_OFFSET + static_cast<UINT_PTR>( sizeof( uint32_t ) ) <=
+                   IDLE_VERIFIED_LENGTH,
+               "the second call's operand is inside the window the gate verifies, so the decode has to end at or "
+               "before the end of that window and not merely inside the pattern" );
+
+static constexpr unsigned char g_aExpectedInnerCallPrologue[] =
+{
+    0x83, 0xEC, 0x08,                     // sub esp, 8
+    0x8D, 0x44, 0x24, 0x00,               // lea eax, [esp]
+    0x50,                                 // push eax
+    0xFF, 0x15, 0xC8, 0x80, 0x85, 0x00,   // call ds:__imp_QueryPerformanceCounter
+    0x8B, 0x44                            // mov eax, [esp+8+PerformanceCount], cut at its first two bytes
+};
+
+static_assert( sizeof( g_aExpectedInnerCallPrologue ) == 16,
+               "the install time check compares sixteen bytes of the trampoline target" );
+
+// Checked at build time against the bytes it was read from; the offset is a sum of the encoded lengths.
+constexpr UINT_PTR IDLE_QUERY_PERFORMANCE_COUNTER_SLOT = 0x008580C8;
+
+constexpr UINT_PTR IDLE_INNER_CALL_INDIRECT_OPCODE_LENGTH = 1;
+constexpr UINT_PTR IDLE_INNER_CALL_INDIRECT_MODRM_LENGTH  = 1;
+constexpr UINT_PTR IDLE_INNER_CALL_LEA_ESP_LENGTH         = 4;
+constexpr UINT_PTR IDLE_INNER_CALL_PUSH_ESP_LENGTH        = 1;
+
+constexpr UINT_PTR IDLE_INNER_CALL_OPCODE_OFFSET =
+    IDLE_SUB_ESP_LENGTH + IDLE_INNER_CALL_LEA_ESP_LENGTH + IDLE_INNER_CALL_PUSH_ESP_LENGTH;
+constexpr UINT_PTR IDLE_INNER_CALL_OPERAND_OFFSET =
+    IDLE_INNER_CALL_OPCODE_OFFSET + IDLE_INNER_CALL_INDIRECT_OPCODE_LENGTH +
+    IDLE_INNER_CALL_INDIRECT_MODRM_LENGTH;
+
+static_assert( g_aExpectedInnerCallPrologue[IDLE_INNER_CALL_OPCODE_OFFSET] == 0xFF &&
+               g_aExpectedInnerCallPrologue[IDLE_INNER_CALL_OPCODE_OFFSET + IDLE_INNER_CALL_INDIRECT_OPCODE_LENGTH]
+                   == 0x15,
+               "the operand below is read as an indirect call's address, so these two bytes have to encode that call" );
+static_assert( IDLE_INNER_CALL_OPERAND_OFFSET + static_cast<UINT_PTR>( sizeof( uint32_t ) ) <=
+                   sizeof( g_aExpectedInnerCallPrologue ),
+               "this decode reads four bytes from the pattern, so all four have to lie inside it" );
+
+constexpr uint32_t IDLE_QUERY_PERFORMANCE_COUNTER_SLOT_ENCODED =
+    static_cast<uint32_t>( g_aExpectedInnerCallPrologue[IDLE_INNER_CALL_OPERAND_OFFSET] )
+    | ( static_cast<uint32_t>( g_aExpectedInnerCallPrologue[IDLE_INNER_CALL_OPERAND_OFFSET + 1] ) << 8 )
+    | ( static_cast<uint32_t>( g_aExpectedInnerCallPrologue[IDLE_INNER_CALL_OPERAND_OFFSET + 2] ) << 16 )
+    | ( static_cast<uint32_t>( g_aExpectedInnerCallPrologue[IDLE_INNER_CALL_OPERAND_OFFSET + 3] ) << 24 );
+
+static_assert( IDLE_QUERY_PERFORMANCE_COUNTER_SLOT == IDLE_QUERY_PERFORMANCE_COUNTER_SLOT_ENCODED,
+               "the named slot and the operand in the pattern are one address, so a mistyped digit fails this build" );
+static_assert( sizeof( void * ) == 4 && sizeof( UINT_PTR ) == 4,
+               "the trampoline pushes a 32 bit address and resumes at one, which assume these widths" );
+static_assert( std::is_same_v<decltype( &CSAIdleHook::Idle ), void ( __cdecl * )( void * )>,
+               "the games callers reach the redirected entry point directly, so it has to stay __cdecl" );
+
+// Memory indirect, since a rel32 cannot reach a module the loader may move. The push reproduces what a call would
+// have left behind; holds only while gta_sa.exe loads at 0x00400000.
+static void *const g_pIdleInnerCall = reinterpret_cast<void *>( IDLE_INNER_CALL );
+__declspec( naked ) static void __cdecl IdleOriginalNaked( void * )
+{
+    __asm
+    {
+        sub  esp, IDLE_SUB_ESP_ALLOCATION_IMM
+        push IDLE_RESUME_ADDRESS_IMM
+        jmp  dword ptr [g_pIdleInnerCall]
+    }
+}
+#undef IDLE_SUB_ESP_ALLOCATION_IMM
+#undef IDLE_RESUME_ADDRESS_IMM
+
+#define _Idle( ptr ) IdleOriginalNaked( ptr )
 // B7CB49     ; CTimer::m_UserPause
 #define CTimer__m_UserPause (*(bool *)0xB7CB49)	
 #define CPostEffects__m_bDisableAllPostEffect (*(bool *)0xC402CF)	
@@ -61,28 +254,457 @@ float CSAIdleHook::m_fShadowDNBalance = 1.0;
 // CGrassRenderer sets each plant type's colour with RpGeometryForAllMaterials( geometry, 0x5DAC10, &colour ). Its alpha
 // comes from plants.dat (about 40/255, faded with distance) and is meant for soft blending, but the building pipeline's
 // forward pixel shader discards everything below 0.3, so no grass would be visible. Scale the alpha before it's set.
+constexpr UINT_PTR GRASS_COLOUR_CALLBACK = 0x5DAC10;
+constexpr UINT_PTR GRASS_CALLBACK_SITE = 0x5DAEC7;
+constexpr UINT_PTR RENDER2D_CALL_SITE = 0x53EB12;
+
+// The operand after each A1 is a linked address, so bytes rather than containment tell functions apart.
+static constexpr unsigned char g_aExpectedGrassCallbackPrologue[] =
+{
+    0x8B, 0x44, 0x24, 0x08,         // mov eax, [esp+8]
+    0x8B, 0x08,                     // mov ecx, [eax]
+    0xA1, 0xC0, 0x2D, 0xC0, 0x00,   // mov eax, ds:[0C02DC0h]
+    0x56,                           // push esi
+    0x8B, 0x74, 0x24, 0x08          // mov esi, [esp+8]
+};
+
+static constexpr unsigned char g_aExpectedRender2dPrologue[] =
+{
+    0xA1, 0x24, 0x7B, 0xC9, 0x00,   // mov eax, ds:[0C97B24h]
+    0x83, 0xEC, 0x18,               // sub esp, 18h
+    0x6A, 0x00,                     // push 0
+    0x6A, 0x06,                     // push 6
+    0xFF, 0x50, 0x20,               // call dword ptr [eax+20h]
+    0x8B                            // mov, the next instruction, cut at its first byte
+};
+
+static_assert( sizeof( g_aExpectedGrassCallbackPrologue ) == 16 &&
+                   sizeof( g_aExpectedRender2dPrologue ) == 16,
+               "the install time checks compare sixteen bytes of each target" );
+
+using TRender2dPass = void ( __cdecl * )( void );
+
 static RpMaterial *SetGrassMaterialColour( RpMaterial *material, void *data )
 {
     const float alphaScale = 6.0f;
     RwRGBA colour = *static_cast<RwRGBA *>( data );
     colour.alpha  = static_cast<RwUInt8>( min( colour.alpha * alphaScale, 255.0f ) );
-    return ( (RpMaterial * (__cdecl *)( RpMaterial *, void * ))0x5DAC10 )( material, &colour );
+    return ( (RpMaterial * (__cdecl *)( RpMaterial *, void * ))GRASS_COLOUR_CALLBACK )( material, &colour );
 }
+
+enum class ERender2dRefusal
+{
+    CallSiteOutsideImage,
+    CallSiteUnreadable,
+    CallSiteNotACall,
+    TargetOutsideImage,
+    TargetNotExecutable,
+    TargetUnreadable,
+    TargetNotTheFunction,
+    Count
+};
+
+static void ReportRender2dRefusal( ERender2dRefusal refusal, const char *reason )
+{
+    static bool s_aReported[static_cast<int>( ERender2dRefusal::Count )] = {};
+    const int index = static_cast<int>( refusal );
+    if ( !g_pDebug || !reason || index < 0 || index >= static_cast<int>( ERender2dRefusal::Count ) )
+        return;
+    if ( s_aReported[index] )
+        return;
+    s_aReported[index] = true;
+    char report[256];
+    _snprintf_s( report, sizeof( report ), _TRUNCATE, "Render2d: %s, so the 2D pass is skipped", reason );
+    g_pDebug->printError( report );
+}
+
+static TRender2dPass FindRender2dPass()
+{
+    if ( !IsInHostImage( reinterpret_cast<const void *>( RENDER2D_CALL_SITE ), REL32_BRANCH_LENGTH ) )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::CallSiteOutsideImage,
+                               "the call site is not inside this executable's own image" );
+        return nullptr;
+    }
+    if ( !IsReadableRange( reinterpret_cast<const void *>( RENDER2D_CALL_SITE ), REL32_BRANCH_LENGTH ) )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::CallSiteUnreadable,
+                               "the call site is not readable bytes" );
+        return nullptr;
+    }
+    if ( *reinterpret_cast<const unsigned char *>( RENDER2D_CALL_SITE ) != REL32_CALL_OPCODE )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::CallSiteNotACall,
+                               "the call this pass is reached through is not where this build expects it" );
+        return nullptr;
+    }
+    // Read through the helper the writers use; a backward call needs an unsigned sum to reach its target.
+    const uint32_t render2dDisplacement = ReadRel32Displacement( RENDER2D_CALL_SITE );
+    const UINT_PTR render2dTarget = RENDER2D_CALL_SITE + REL32_BRANCH_LENGTH + render2dDisplacement;
+    // Position, executability, readability then identity; a page this process may run is not always one it may
+    // load from.
+    if ( !IsInHostImage( reinterpret_cast<const void *>( render2dTarget ), sizeof( g_aExpectedRender2dPrologue ) ) )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::TargetOutsideImage,
+                               "the displacement at the call site decodes to an address outside this executable's own "
+                               "image" );
+        return nullptr;
+    }
+    if ( !IsExecutableRange( reinterpret_cast<const void *>( render2dTarget ),
+                             sizeof( g_aExpectedRender2dPrologue ) ) )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::TargetNotExecutable,
+                               "the displacement at the call site decodes to an address this process cannot execute" );
+        return nullptr;
+    }
+    if ( !IsReadableRange( reinterpret_cast<const void *>( render2dTarget ),
+                           sizeof( g_aExpectedRender2dPrologue ) ) )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::TargetUnreadable,
+                               "the displacement at the call site decodes to an address this process cannot read, so "
+                               "the bytes naming it were not compared" );
+        return nullptr;
+    }
+    if ( !HoldsExpectedBytes( render2dTarget, g_aExpectedRender2dPrologue, sizeof( g_aExpectedRender2dPrologue ) ) )
+    {
+        ReportRender2dRefusal( ERender2dRefusal::TargetNotTheFunction,
+                               "the displacement at the call site decodes to a function this build was not made for" );
+        return nullptr;
+    }
+    return reinterpret_cast<TRender2dPass>( render2dTarget );
+}
+
+// A const function local static, initialised once, so nothing can re-point the 2D pass after the install.
+static TRender2dPass Render2dPass()
+{
+    static TRender2dPass const pfnRender2dPass = FindRender2dPass();
+    return pfnRender2dPass;
+}
+
+// Names the first differing byte past the ones the gate verifies, once and as an error, because the redirect
+// goes ahead regardless.
+static void ReportIdleTailDivergence()
+{
+    if ( !g_pDebug )
+        return;
+    if ( !IsReadableRange( reinterpret_cast<const void *>( IDLE_FUNCTION_ADDRESS + IDLE_VERIFIED_LENGTH ),
+                           IDLE_PROLOGUE_LENGTH - IDLE_VERIFIED_LENGTH ) )
+        return;
+    for ( SIZE_T index = IDLE_VERIFIED_LENGTH; index < IDLE_PROLOGUE_LENGTH; ++index )
+    {
+        if ( *reinterpret_cast<const unsigned char *>( IDLE_FUNCTION_ADDRESS + index ) ==
+             g_aExpectedIdlePrologue[index] )
+            continue;
+        char report[256];
+        _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                     "Idle hook: the idle function's entry differs from the pattern this hook was built for at byte "
+                     "offset %u and possibly beyond, past the point the trampoline reads, so the redirect still goes "
+                     "ahead", static_cast<unsigned int>( index ) );
+        g_pDebug->printError( report );
+        return;
+    }
+}
+
+// Settled once, since the store runs every frame.
+static bool g_bDayNightBalanceStorable = false;
 
 void CSAIdleHook::Patch()
 {
-    RedirectCall( 0x53ECBD, Idle );
-    SetPointer( 0x5DAEC8, SetGrassMaterialColour ); // operand of push 5DAC10h in CGrassRenderer::DrawTriPlants
+    (void)Render2dPass();
+    // Settled before every return below, so a refusal at one of the sites that follow doesnt take the weight down
+    // with it.
+    g_bDayNightBalanceStorable =
+        IsInHostImage( reinterpret_cast<const void *>( GAME_DAY_NIGHT_BALANCE_ADDR ), sizeof( float ) ) &&
+        IsWritableRange( reinterpret_cast<const void *>( GAME_DAY_NIGHT_BALANCE_ADDR ), sizeof( float ) );
+    if ( !g_bDayNightBalanceStorable )
+        g_pDebug->printError( "Day and night blend: the weight the building renderer reads is not writable memory "
+                              "inside this executable's own image, so it was left at whatever the game set and "
+                              "building colours, particles and exposure will not follow the clock" );
+    // Operand of push 5DAC10h in CGrassRenderer::DrawTriPlants. Safe only where the site still holds that push.
+    if ( !IsInHostImage( reinterpret_cast<const void *>( GRASS_CALLBACK_SITE ), PUSH_IMM32_LENGTH ) ||
+         !IsReadableRange( reinterpret_cast<const void *>( GRASS_CALLBACK_SITE ), PUSH_IMM32_LENGTH ) )
+        g_pDebug->printError( "Grass hook: the site the plant colour callback belongs at is not readable bytes "
+                              "inside this executable's own image, so the game keeps the callback it set up "
+                              "itself" );
+    else
+    {
+        const unsigned char grassOpcode =
+            *reinterpret_cast<const unsigned char *>( GRASS_CALLBACK_SITE );
+        // Copied, not cast: those bytes are the games instruction, so no UINT_PTR object lives there.
+        UINT_PTR grassOperand;
+        static_assert( PUSH_IMM32_OPCODE_LENGTH + static_cast<int>( sizeof( grassOperand ) ) == PUSH_IMM32_LENGTH,
+                       "the operand is four bytes wide by the opcode, and the copy and the write below both use the "
+                       "width of this variable, so a target whose pointer is wider would overwrite the instruction "
+                       "after the operand" );
+        memcpy( &grassOperand, reinterpret_cast<const void *>( GRASS_CALLBACK_SITE + PUSH_IMM32_OPCODE_LENGTH ),
+                sizeof( grassOperand ) );
+        if ( grassOpcode != PUSH_IMM32_OPCODE )
+            g_pDebug->printError( "Grass hook: the site the plant colour callback belongs at does not hold the push "
+                                  "this hook replaces, so the game keeps the callback it set up itself" );
+        else if ( grassOperand == GRASS_COLOUR_CALLBACK )
+        {
+            if ( !IsInHostImage( reinterpret_cast<const void *>( GRASS_COLOUR_CALLBACK ),
+                                 sizeof( g_aExpectedGrassCallbackPrologue ) ) ||
+                 !IsExecutableRange( reinterpret_cast<const void *>( GRASS_COLOUR_CALLBACK ),
+                                     sizeof( g_aExpectedGrassCallbackPrologue ) ) ||
+                 !HoldsExpectedBytes( GRASS_COLOUR_CALLBACK, g_aExpectedGrassCallbackPrologue,
+                                      sizeof( g_aExpectedGrassCallbackPrologue ) ) )
+                g_pDebug->printError( "Grass hook: the plant colour callback is not the function this hook was built "
+                                      "for at an address this process can execute inside its own image, so the game "
+                                      "keeps the callback it set up itself" );
+            else if ( !SetPointer( GRASS_CALLBACK_SITE + PUSH_IMM32_OPCODE_LENGTH,
+                                   reinterpret_cast<void *>( SetGrassMaterialColour ) ) )
+                g_pDebug->printError( "Grass hook: the site the plant colour callback is written to could not be "
+                                      "made writable, so the game keeps the callback it set up itself" );
+        }
+        else if ( grassOperand != reinterpret_cast<UINT_PTR>( &SetGrassMaterialColour ) )
+            g_pDebug->printError( "Grass hook: the plant colour callback is not where this hook expects it, so the "
+                                  "game keeps the callback it set up itself" );
+    }
+
+    // Stronger than the inner call's gate below: this address takes the branch and the trampoline re-executes its
+    // bytes.
+    if ( !IsInHostImage( reinterpret_cast<const void *>( IDLE_FUNCTION_ADDRESS ), IDLE_PROLOGUE_LENGTH ) ||
+         !IsReadableRange( reinterpret_cast<const void *>( IDLE_FUNCTION_ADDRESS ), IDLE_PROLOGUE_LENGTH ) ||
+         !IsExecutableRange( reinterpret_cast<const void *>( IDLE_FUNCTION_ADDRESS ), IDLE_PROLOGUE_LENGTH ) )
+    {
+        g_pDebug->printError( "Idle hook: the idle function's entry is not readable, executable bytes inside this "
+                              "executable's own image, so it was left alone and this plugin's frame pipeline will not "
+                              "run" );
+        return;
+    }
+    const unsigned char *pIdle =
+        reinterpret_cast<const unsigned char *>( IDLE_FUNCTION_ADDRESS );
+    const EBytesMatch idlePrefix =
+        CompareExpectedBytes( IDLE_FUNCTION_ADDRESS, g_aExpectedIdlePrologue, IDLE_VERIFIED_LENGTH );
+    if ( idlePrefix == EBytesMatch::Unreadable )
+    {
+        g_pDebug->printError( "Idle hook: the idle function's entry stopped being readable memory between the test "
+                              "above and this comparison, so it was left alone and this plugin's frame pipeline will "
+                              "not run" );
+        return;
+    }
+    if ( idlePrefix == EBytesMatch::Mismatch )
+    {
+        if ( HoldsOwnBranch( IDLE_FUNCTION_ADDRESS, REL32_JUMP_OPCODE, reinterpret_cast<void *>( &Idle ) ) )
+            return;
+        if ( pIdle[0] == REL32_JUMP_OPCODE )
+        {
+            g_pDebug->printError( "Idle hook: the idle function's entry already jumps somewhere else, so another "
+                                  "hook or another copy of this plugin owns it and this copy's frame pipeline "
+                                  "will not run" );
+            return;
+        }
+        g_pDebug->printError( "Idle hook: this executable's idle function is not the one the hook was built "
+                              "for, so it was left alone and this plugin's frame pipeline will not run" );
+        return;
+    }
+    // Past the verified window a difference is reported and the redirect goes ahead; those bytes carry no address.
+    else if ( CompareExpectedBytes( IDLE_FUNCTION_ADDRESS, g_aExpectedIdlePrologue, IDLE_PROLOGUE_LENGTH ) !=
+              EBytesMatch::Match )
+        ReportIdleTailDivergence();
+
+    if ( !IsInHostImage( reinterpret_cast<const void *>( IDLE_INNER_CALL ),
+                         sizeof( g_aExpectedInnerCallPrologue ) ) ||
+         !IsExecutableRange( reinterpret_cast<const void *>( IDLE_INNER_CALL ),
+                             sizeof( g_aExpectedInnerCallPrologue ) ) ||
+         !HoldsExpectedBytes( IDLE_INNER_CALL, g_aExpectedInnerCallPrologue,
+                              sizeof( g_aExpectedInnerCallPrologue ) ) )
+    {
+        g_pDebug->printError( "Idle hook: the call the trampoline re-enters is not the function this hook was built "
+                              "for at an address this process can execute inside its own image, so it was left "
+                              "alone and this plugin's frame pipeline will not run" );
+        return;
+    }
+
+    // Checked rather than the bool, since a write the processor wasnt told about would read as a clean install.
+    switch ( RedirectJumpChecked( IDLE_FUNCTION_ADDRESS, reinterpret_cast<void *>( Idle ) ) )
+    {
+    case EWriteResult::Failed:
+        g_pDebug->printError( "Idle hook: the idle function's entry could not be given this hook's jump, so this "
+                              "plugin's frame pipeline will not run" );
+        break;
+    case EWriteResult::WrittenNotClean:
+        g_pDebug->printError( "Idle hook: the idle function's entry holds this hook's jump but the processor was not "
+                              "told those bytes changed, so it may keep running the unpatched entry and this "
+                              "plugin's frame pipeline may not run" );
+        break;
+    case EWriteResult::Clean:
+        break;
+    }
 }
+
+// Depth inside the entry, per thread. A host that owns the message loop pumps messages straight back here.
+static thread_local unsigned int g_uiIdleDepth = 0;
+
+struct SIdleDepthScope
+{
+    SIdleDepthScope()
+    {
+        ++g_uiIdleDepth;
+    }
+    ~SIdleDepthScope()
+    {
+        --g_uiIdleDepth;
+    }
+
+    SIdleDepthScope( const SIdleDepthScope & ) = delete;
+    SIdleDepthScope & operator=( const SIdleDepthScope & ) = delete;
+};
+
+// Whether the frame this thread is in runs the hook pipeline, read once because the menu can flip it mid frame.
+static thread_local bool g_bFrameRunsHook = false;
+
+struct SFrameModeScope
+{
+    explicit SFrameModeScope( bool bRunsHook )
+        : m_bPrevious( g_bFrameRunsHook )
+    {
+        g_bFrameRunsHook = bRunsHook;
+    }
+    ~SFrameModeScope()
+    {
+        g_bFrameRunsHook = m_bPrevious;
+    }
+
+    SFrameModeScope( const SFrameModeScope & ) = delete;
+    SFrameModeScope & operator=( const SFrameModeScope & ) = delete;
+
+private:
+    bool m_bPrevious;
+};
+
+static std::atomic<DWORD> g_dwFrameThread( 0 );
+
+// Recorded rather than reported, since CDebug is not thread safe; one atomic for both ids keeps the pairing.
+static std::atomic<unsigned long long> g_ullClaimRefusal( 0 );
+static std::atomic<unsigned long> g_ulClaimRefusals( 0 );
+
+struct SFrameClaimScope
+{
+    SFrameClaimScope()
+    {
+        m_dwOwner = GetCurrentThreadId();
+        DWORD dwExpected = 0;
+        m_bClaimed =
+            g_dwFrameThread.compare_exchange_strong( dwExpected, m_dwOwner, std::memory_order_acq_rel );
+        // On failure the exchange reports what it saw, which is the thread to name. Reading the atomic again would
+        // race.
+        m_dwObserved = dwExpected;
+    }
+    ~SFrameClaimScope()
+    {
+        if ( !m_bClaimed )
+            return;
+        DWORD dwExpected = m_dwOwner;
+        g_dwFrameThread.compare_exchange_strong( dwExpected, 0, std::memory_order_acq_rel );
+    }
+    bool Claimed() const { return m_bClaimed; }
+    DWORD ObservedOwner() const { return m_dwObserved; }
+
+    SFrameClaimScope( const SFrameClaimScope & ) = delete;
+    SFrameClaimScope & operator=( const SFrameClaimScope & ) = delete;
+
+private:
+    DWORD m_dwOwner = 0;
+    DWORD m_dwObserved = 0;
+    bool m_bClaimed = false;
+};
+
+// Each exit that abandons a frame before anything is drawn names itself.
+static void ReportIdleFrameAbandoned( const char *reason )
+{
+    if ( !g_pDebug || reason == nullptr )
+        return;
+    char report[256];
+    _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                 "Idle hook: %s, so nothing was drawn or presented this frame", reason );
+    g_pDebug->printError( report );
+}
+
+// Set while the bar's own pause stands in CTimer::m_UserPause; only touched inside a claimed frame.
+static bool s_bGuiPauseHeld = false;
 
 void CSAIdleHook::Idle( void *Data )
 {
-    SettingsHolder::Instance()->InitGUI();
-    if ( !gDebugSettings.GetToggleField( "UseIdleHook" ) )
+    // A call inside a frame came from a message the host pumped mid frame, and _Idle runs a whole CGame::Idle,
+    // so it is dropped.
+    if ( g_uiIdleDepth != 0 )
     {
+        constexpr unsigned long IDLE_DROP_REPORT_INTERVAL = 600;
+        static thread_local unsigned long s_aulDropped[2] = { 0, 0 };
+        unsigned long &ulDropped = s_aulDropped[g_bFrameRunsHook ? 1 : 0];
+        // Unsigned overflow wraps to zero, which is not a drop count, so zero is skipped.
+        ++ulDropped;
+        if ( ulDropped != 0 && ( ulDropped == 1 || ulDropped % IDLE_DROP_REPORT_INTERVAL == 0 ) )
+        {
+            char report[384];
+            _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                         "Idle hook: the host called the idle entry from inside this plugin's frame at depth %u on "
+                         "thread %lu, so the call was dropped rather than running a second complete frame%s; drop %lu "
+                         "on this thread",
+                         g_uiIdleDepth, GetCurrentThreadId(),
+                         g_bFrameRunsHook ? "" : " (the surrounding frame is a pass-through, so the hook is off)",
+                         ulDropped );
+            if ( g_pDebug )
+                g_pDebug->printError( report );
+        }
+        return;
+    }
 
+    // What the depth above cannot see. Declared first, so the claim releases after the frame's own scopes.
+    SFrameClaimScope frameClaim;
+    if ( !frameClaim.Claimed() )
+    {
+        // Recorded only, because this is not the frame thread and CDebug is not thread safe.
+        g_ullClaimRefusal.store( ( static_cast<unsigned long long>( frameClaim.ObservedOwner() ) << 32 ) |
+                                 static_cast<unsigned long long>( GetCurrentThreadId() ),
+                                 std::memory_order_relaxed );
+        // Release, so a frame thread that drains this count also sees the pair stored above it.
+        g_ulClaimRefusals.fetch_add( 1, std::memory_order_release );
+        return;
+    }
+    // Drained only when there is somewhere to write it.
+    if ( g_pDebug )
+    {
+        const unsigned long ulRefusals = g_ulClaimRefusals.exchange( 0, std::memory_order_acquire );
+        if ( ulRefusals != 0 )
+        {
+            const unsigned long long refusal = g_ullClaimRefusal.load( std::memory_order_relaxed );
+            char report[320];
+            _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                         "Idle hook: the idle entry was called on thread %lu while thread %lu was inside a frame, so "
+                         "that call was refused rather than running two frames at once; %lu refused since the last "
+                         "report, the most recent pair named here",
+                         static_cast<unsigned long>( refusal & 0xFFFFFFFFULL ),
+                         static_cast<unsigned long>( refusal >> 32 ), ulRefusals );
+            g_pDebug->printError( report );
+        }
+    }
+
+    // Held for the whole claimed frame, so a call arriving from inside it reads as the frame it is inside.
+    SIdleDepthScope frame;
+    const bool bHookActive = gDebugSettings.GetToggleField( "UseIdleHook" );
+    SFrameModeScope frameMode( bHookActive );
+    SettingsHolder::Instance()->InitGUI();
+    if ( !bHookActive )
+    {
+        // Returns before the pause is decided below, so a pause the bar took would outlive the hook being switched
+        // off.
+        if ( s_bGuiPauseHeld )
+        {
+            s_bGuiPauseHeld = false;
+            if ( !FrontEndMenuManager.m_bMenuActive )
+                CTimer__m_UserPause = false;
+        }
         _Idle( Data );
         SettingsHolder::Instance()->DrawGUI();
+        return;
+    }
+    // Refused before the first mutation, since the updates below advance the clock and world for a frame never drawn.
+    if ( !Data )
+    {
+        ReportIdleFrameAbandoned( "the idle entry was called with no data argument" );
         return;
     }
     SettingsHolder::Instance()->ReloadShadersIfRequired();
@@ -95,14 +717,22 @@ void CSAIdleHook::Idle( void *Data )
     // Update lighting
     LightUpdate();
 
-    // reload textures if required
+    CRwD3D1XEngine* dxEngine = (CRwD3D1XEngine*)g_pRwCustomEngine;
+
+    // RenderHUD is the only caller of RsCameraShowRaster, so abandoning the frame here also abandons the present.
+    PrepareRwCamera();
+    if ( !RsCameraBeginUpdate( Scene.m_pRwCamera ) )
+    {
+        ReportIdleFrameAbandoned( "the camera refused to begin an update" );
+        return;
+    }
+    // This drain stays after the camera begins updating, since that call raises the size flag; all six clear
+    // together.
     g_pDeferredRenderer->QueueTextureReload();
     CVolumetricLighting::QueueTextureReload();
     CCloudRendering::QueueTextureReload();
     CAmbientOcclusion::QueueTextureReload();
     CTemporalAA::QueueTextureReload();
-    // TODO: move to RwD3D1XEngine
-    CRwD3D1XEngine* dxEngine = (CRwD3D1XEngine*)g_pRwCustomEngine;
     if ( dxEngine->m_bScreenSizeChanged || g_pDeferredRenderer->m_pShadowRenderer->m_bRequiresReloading ||
          g_pDeferredRenderer->m_bRequiresReloading ||
          CVolumetricLighting::m_bRequiresReloading ||
@@ -117,46 +747,40 @@ void CSAIdleHook::Idle( void *Data )
         CAmbientOcclusion::m_bRequiresReloading                      = false;
         CCloudRendering::m_bRequiresReloading                        = false;
     }
-
-    if ( !Data )
-        return;
-    PrepareRwCamera();
-    if ( !RsCameraBeginUpdate( Scene.m_pRwCamera ) )
-        return;
-    if ( dxEngine->m_bScreenSizeChanged )
-    {
-        g_pDeferredRenderer->QueueTextureReload();
-        CVolumetricLighting::QueueTextureReload();
-        CCloudRendering::QueueTextureReload();
-        CAmbientOcclusion::QueueTextureReload();
-        CTemporalAA::QueueTextureReload();
-        dxEngine->ReloadTextures();
-        dxEngine->m_bScreenSizeChanged = false;
-    }
     if ( !FrontEndMenuManager.m_bMenuActive )
         PrepareRenderStuff();
     else if ( SettingsHolder::Instance()->IsGUIEnabled() )
-    {
         SettingsHolder::Instance()->DisableGUI();
-        CTimer__m_UserPause = false;
-    }
-    if ( !FrontEndMenuManager.m_bMenuActive && TheCamera.GetScreenFadeStatus() != 2 )
+    // One predicate for both, since taken separately a screen fade outlasts the bar's draw test.
+    const bool bDrawFrame = !FrontEndMenuManager.m_bMenuActive && TheCamera.GetScreenFadeStatus() != 2;
+    // The menu owns this flag through its own start and end calls, so it is written only when the bar's state
+    // differs.
+    const bool bGuiWantsPause = bDrawFrame && SettingsHolder::Instance()->IsGUIEnabled();
+    // Taking the pause is unconditional, releasing it is not: the flag carries no owner.
+    const bool bWeHoldPause = s_bGuiPauseHeld;
+    if ( bGuiWantsPause != CTimer__m_UserPause &&
+         ( bGuiWantsPause || ( bWeHoldPause && !FrontEndMenuManager.m_bMenuActive ) ) )
+        CTimer__m_UserPause = bGuiWantsPause;
+    // Ownership follows the bar even when the write was withheld.
+    s_bGuiPauseHeld = bGuiWantsPause;
+    if ( bDrawFrame )
     {
         RenderInGame();
         SettingsHolder::Instance()->DrawGUI();
         DefinedState2d();
         if ( SettingsHolder::Instance()->IsGUIEnabled() )
         {
-            POINT mousePos;
-            GetCursorPos( &mousePos );
-            if ( dxEngine->getRenderer()->getHWND() )
-                ScreenToClient( dxEngine->getRenderer()->getHWND(), &mousePos );
-            //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEVERTEXALPHAENABLE, TRUE);
-            FrontEndMenuManager.m_apTextures[23].SetRenderState();
-            FrontEndMenuManager.m_apTextures[23].DrawTxRect(
-                { (float)mousePos.x, (float)mousePos.y,
-                (float)mousePos.x + 10.0f, (float)mousePos.y + 16.0f },
-                { 255,255,255,255 } );
+            POINT mousePos{};
+            const HWND hWnd = dxEngine->getRenderer()->getHWND();
+            if ( hWnd && GetCursorPos( &mousePos ) && ScreenToClient( hWnd, &mousePos ) )
+            {
+                //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEVERTEXALPHAENABLE, TRUE);
+                FrontEndMenuManager.m_apTextures[23].SetRenderState();
+                FrontEndMenuManager.m_apTextures[23].DrawTxRect(
+                    { (float)mousePos.x, (float)mousePos.y,
+                    (float)mousePos.x + 10.0f, (float)mousePos.y + 16.0f },
+                    { 255,255,255,255 } );
+            }
         }
     }
     RenderHUD();
@@ -188,7 +812,8 @@ void CSAIdleHook::UpdateShadowDNBalance()
     // replaces that update, so nothing else writes it while the game runs. Building colours, particles,
     // skidmarks and the exposure of every pixel read it, and all of them would otherwise see the value it
     // was initialised to, which is full night, for the whole session.
-    *(float*)( GAME_DAY_NIGHT_BALANCE_ADDR ) = fBalance;
+    if ( g_bDayNightBalanceStorable )
+        *(float*)( GAME_DAY_NIGHT_BALANCE_ADDR ) = fBalance;
 }
 
 // Render one game frame
@@ -197,7 +822,6 @@ void CSAIdleHook::RenderInGame()
     CPerfTimer shadowTimer( "Shadow Time" );
     CPerfTimer deferredTimer( "Deferred Time" );
     CPerfTimer scanTimer( "Renderlist construction time" );
-    CPerfTimer gameTimer( "Game Time" );
 
     // previous world matrices for object motion vectors are per rendered frame
     g_pRenderBuffersMgr->NextFrame();
@@ -318,8 +942,10 @@ void CSAIdleHook::RenderInGame()
         DebugRendering::RenderRaster( gDebugSettings.DebugRenderTargetList[gDebugSettings.DebugRenderTargetNumber] );
 
     DefinedState();
-    int Render2dStuffAddress = *(DWORD *)0x53EB13 + 0x53EB12 + 5;
-    ( ( int( __cdecl * )( ) )Render2dStuffAddress )( );
+    // Restores the game's own 2D pass rather than adding one; the hook replaces CGame::Idle's body, so 0x53EB12 is
+    // called here.
+    if ( TRender2dPass pfnRender2dPass = Render2dPass() )
+        pfnRender2dPass();
     //Render2dStuff();
     // Render preformance counters if required.
     if ( gDebugSettings.GetToggleField( "ShowPreformanceCounters" ) )
@@ -329,6 +955,9 @@ void CSAIdleHook::RenderInGame()
         //CFont::SetAlignment(eFontAlignment::ALIGN_RIGHT);
         //CFont::SetScale(0.5, 0.5);
         CFont::SetColor( color );
+        // The framebuffer is null until the first one is made.
+        if ( Scene.m_pRwCamera->frameBuffer == nullptr )
+            return;
         float FontXPos = Scene.m_pRwCamera->frameBuffer->width - 20.0f;
         float FontYPos = Scene.m_pRwCamera->frameBuffer->height - 20.0f;
         CFont::PrintString( FontXPos, FontYPos - 750.0f, (char*)( "NumBlocksOutsideWorldToBeRendered : " + to_string( CWaterLevel::m_NumBlocksOutsideWorldToBeRendered ) ).c_str() );
@@ -525,7 +1154,7 @@ void CSAIdleHook::PrepareRenderStuff()
     RwV2d mousePos;
     mousePos.x = RsGlobal.maximumWidth * 0.5f;
     mousePos.y = RsGlobal.maximumHeight * 0.5f;
-    POINT pMousePos;
+    POINT pMousePos{};
     // TODO: add custom key to show menu
     static bool s_bPrevGuiEnabled = false;
     static bool s_bPrevF12Down = false;
@@ -553,16 +1182,15 @@ void CSAIdleHook::PrepareRenderStuff()
         s_bPrevGuiEnabled = guiEnabled;
     }
     HWND hWnd = guiEnabled ? static_cast<CRwD3D1XEngine*>( g_pRwCustomEngine )->getRenderer()->getHWND() : nullptr;
-    if ( guiEnabled && GetCursorPos( &pMousePos ) && hWnd )
-        ScreenToClient( hWnd, &pMousePos );
+    const bool bHaveMousePos = guiEnabled && hWnd != nullptr && GetCursorPos( &pMousePos ) != FALSE &&
+                               ScreenToClient( hWnd, &pMousePos ) != FALSE;
     if ( !guiEnabled )
     {
         // Let DirectInput handle in-game mouse movement exclusively without per-frame SetCursorPos interference
     }
-    else
+    else if ( bHaveMousePos )
         TwMouseMotion( pMousePos.x, pMousePos.y );
     //ShowCursor(guiEnabled);
-    CTimer__m_UserPause = guiEnabled;
 }
 
 void CSAIdleHook::Render2dStuffAfterFade()
@@ -596,7 +1224,6 @@ void CSAIdleHook::PrepareRwCamera()
 
 void CSAIdleHook::LightUpdate()
 {
-    CPointLights::NumLights = 0;
     CLightManager::Reset();
     UpdateShadowDNBalance();
     SetLightsWithTimeOfDayColour( Scene.m_pRpWorld );
@@ -604,6 +1231,8 @@ void CSAIdleHook::LightUpdate()
 
 void CSAIdleHook::GameUpdate()
 {
+    // Reset before the process step, as the original idle does.
+    CPointLights::NumLights = 0;
     CGame::Process();
     CAudioEngine__Service( AudioEngine );
 }
@@ -616,10 +1245,8 @@ void CSAIdleHook::InitPerFrame2D()
 
 void CSAIdleHook::TimeUpdate()
 {
-    while ( CTimer__GetTimeMillisecondsFromStart() < 1 )
-        ;
-
-    CGame__TimeMillisecondsFromStart = CTimer__GetTimeMillisecondsFromStart();
+    // The original spins here until the millisecond clock leaves zero, which start up has already passed.
+    CGame__LastTickTime = CTimer__GetTimeMillisecondsFromStart();
     CTimer__Update();
 }
 

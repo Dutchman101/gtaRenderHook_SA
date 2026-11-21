@@ -12,9 +12,6 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#define ENVMAPSIZE 512
-#define MIPLEVELS 7
-
 CCubemapReflectionRenderer::CCubemapReflectionRenderer( int size )
     : m_nCubemapSize( size )
 {
@@ -172,8 +169,8 @@ void CCubemapReflectionRenderer::RenderToCubemap( void ( *renderCB )() )
     // pass started has to come back once the last face is done. Restoring inside the callback would cover only
     // the first face, because the callback is invoked once per face.
     const RwCullMode savedCullMode = g_pStateMgr->GetCullMode();
-    // Move reflection camera to game camera position.
-    auto  s_cam_frame = RwCameraGetFrame( m_pReflCamera );
+    // Move reflection camera to game camera position. The position comes from FindPlayerCoors below, so the
+    // reflection camera's own frame isnt queried.
     RwV3d campos;
     // campos =
     // *RwMatrixGetPos(RwFrameGetMatrix(RwCameraGetFrame(Scene.m_pRwCamera)));

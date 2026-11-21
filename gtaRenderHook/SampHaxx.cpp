@@ -722,10 +722,10 @@ template <> Wrapper<IDirect3D9Wrapper> &Wrapper<IDirect3D9Wrapper>::Inst()
 
 void SampHaxx::Patch()
 {
-    static IDirect3DDevice9 *&dev_ptr =
-        *reinterpret_cast<IDirect3DDevice9 **>( 0xC97C28 );
-    dev_ptr = reinterpret_cast<IDirect3DDevice9 *>(
-        Wrapper<IDirect3DDevice9Wrapper>::Inst().Get() );
+    // Through the shared writer for its region and protection handling, so an uncommitted slot is refused rather
+    // than faulting on the write. The address itself is trusted, not checked, and the writer reports its own
+    // refusals.
+    SetPointer( 0xC97C28, reinterpret_cast<void *>( Wrapper<IDirect3DDevice9Wrapper>::Inst().Get() ) );
     //IDirect3D9Wrapper
 }
 

@@ -59,9 +59,11 @@ class CPerfTimer
 private:
     chrono::time_point<hr_clock> beg;
     __int64 msCount = -1;
-    string	m_Name{};
+    // Borrowed, not owned. Call sites pass literals and these are built once per frame, so a copy would cost two
+    // allocations per construction for a label that never changes.
+    const char *m_Name;
 public:
-    explicit CPerfTimer( const string &Name ) : m_Name{ Name }
+    explicit CPerfTimer( const char *Name ) : m_Name{ Name }
     {
     }
     // Begin counting
@@ -80,7 +82,7 @@ public:
         char buff[100];
         snprintf( buff, sizeof( buff ), "%.3f", ( msCount / 1000.0 ) );
 
-        return m_Name + ": " + string( buff ) + " ms";
+        return string( m_Name ) + ": " + buff + " ms";
     }
 };
 
@@ -151,14 +153,7 @@ public:
         {
             if ( !m_reportedErrors.insert( msg ).second )
                 return;
-            if ( pLogStream )
-            {
-                if ( !pLogStream->is_open() )
-                    pLogStream->open( m_fileName, fstream::out | fstream::app );
-                *pLogStream << "Debug Error: " << msg << "\n";
-                pLogStream->close();
-            }
-            OutputDebugString( ( msg + "\n" ).c_str() );
+            writeLine( "Debug Error: ", msg );
         }
         catch ( ... )
         {
@@ -181,6 +176,34 @@ public:
         }
     }
 
+    // Written whatever DebugMessaging and DebugLevel are set to, because printMsg is gated on both and a hook that
+    // installed with no record reads the same as one that never ran.
+    void printRecord( const string &msg )
+    {
+        try
+        {
+            if ( !m_reportedRecords.insert( msg ).second )
+                return;
+            writeLine( "Debug Record: ", msg );
+        }
+        catch ( ... )
+        {
+        }
+    }
+
+    void printRecord( const char* msg )
+    {
+        if ( !msg )
+            return;
+        try
+        {
+            printRecord( string( msg ) );
+        }
+        catch ( ... )
+        {
+        }
+    }
+
     void SetD3DName( ID3D11DeviceChild* dc, const std::string& c_szName )
     {
         if ( !dc )
@@ -193,9 +216,30 @@ public:
         delete pLogStream;
     }
 private:
+
+    // Shared by both ungated channels so the two cannot drift. The file line carries the channel prefix and the
+    // debugger copy doesnt, so the message stands on its own there.
+    void writeLine( const char *prefix, const string &msg )
+    {
+        try
+        {
+            if ( pLogStream )
+            {
+                if ( !pLogStream->is_open() )
+                    pLogStream->open( m_fileName, fstream::out | fstream::app );
+                *pLogStream << prefix << msg << "\n";
+                pLogStream->close();
+            }
+            OutputDebugString( ( msg + "\n" ).c_str() );
+        }
+        catch ( ... )
+        {
+        }
+    }
     ofstream* pLogStream = nullptr;
     string m_fileName{};
     set<string> m_reportedErrors;
+    set<string> m_reportedRecords;
 };
 
 extern CDebug* g_pDebug;

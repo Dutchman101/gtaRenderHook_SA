@@ -40,6 +40,31 @@
 CDebug*				g_pDebug;
 CIRwRenderEngine*	g_pRwCustomEngine;
 
+// The writers in MemoryFuncs.h report through here, so that header needs no logger of its own to link against.
+static void ReportPatchFailureToLog( const char *operation, void *address, const char *reason )
+{
+    if ( !g_pDebug || !operation || !reason )
+        return;
+    char report[256];
+    _snprintf_s( report, sizeof( report ), _TRUNCATE, "%s: the site at 0x%08X %s", operation,
+                 static_cast<unsigned int>( reinterpret_cast<UINT_PTR>( address ) ), reason );
+    g_pDebug->printError( report );
+}
+
+// The other half of the same sink, written as a record because a finished write isnt a fault. Goes through the
+// ungated channel, since DebugLevel 0 silences printMsg.
+static void ReportPatchSuccessToLog( const char *operation, void *address )
+{
+    if ( !g_pDebug || !operation )
+        return;
+    char report[256];
+    _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                 "%s: the site at 0x%08X was written, the processor was told those bytes changed, and the page has "
+                 "its own protection back",
+                 operation, static_cast<unsigned int>( reinterpret_cast<UINT_PTR>( address ) ) );
+    g_pDebug->printRecord( report );
+}
+
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
                        LPVOID lpReserved
@@ -54,6 +79,9 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         SettingsHolder::Instance()->ReloadFile();
         // Init basic stuff
         g_pDebug = new CDebug( "debug.log" );
+        // Before the first patch, so no refusal is dropped for want of a logger.
+        SetPatchFailureSink( ReportPatchFailureToLog );
+        SetPatchSuccessSink( ReportPatchSuccessToLog );
         g_pRwCustomEngine = new CRwD3D1XEngine( g_pDebug );
 
         // Path rw/game stuff
@@ -64,6 +92,22 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         CCustomBuildingDNPipeline::Patch();
         CCustomCarFXPipeline::Patch();
         SampHaxx::Patch();
+
+        // One line for the whole batch, since a refused write leaves the plugin running with part of its hook set.
+        // Braced because a case label would otherwise jump past this initialization.
+        {
+            const unsigned long ulRefusals = PatchRefusalCount();
+            if ( ulRefusals != 0 )
+            {
+                char report[256];
+                // Verb and auxiliary follow the count, so a single refusal reads correctly.
+                _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                             "Patch batch: %lu of this plugin's patch writes %s refused and %s named above, so this "
+                             "plugin is running with the hooks that were written and without the rest",
+                             ulRefusals, ulRefusals == 1 ? "was" : "were", ulRefusals == 1 ? "is" : "are" );
+                g_pDebug->printError( report );
+            }
+        }
 
         break;
     case DLL_THREAD_ATTACH:

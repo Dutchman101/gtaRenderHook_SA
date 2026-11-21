@@ -7,7 +7,9 @@
 // gta functions
 
 #define CTimer__GetTimeMillisecondsFromStart() ((size_t  (__cdecl *)())0x53BAD0)()
-#define CGame__TimeMillisecondsFromStart (*(size_t*)0xB72CA8)
+// 0xB72CA8 holds the millisecond reading the original idle subtracts to pace frames, rewritten each frame. It isnt
+// a start relative stamp.
+#define CGame__LastTickTime (*(size_t*)0xB72CA8)
 
 #define CTimer__Update() ((void (__cdecl *)())0x561B10)()
 #define CAudioEngine__Service(audio) ((void (__thiscall *)(CAudioEngine *))0x507750)(audio)

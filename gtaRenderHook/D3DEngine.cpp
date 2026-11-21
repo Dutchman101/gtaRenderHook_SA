@@ -1059,15 +1059,76 @@ bool createPixelShader( const DWORD *           pFunction,
         ->CreatePixelShader( pFunction, ppShader );
 }
 
+// _RwD3D9CreatePixelShader, .text:007FACC0 in gta_sa.exe.lst. Reads __RwD3DDevice and forwards to slot 1A8h.
+constexpr UINT_PTR PIXEL_SHADER_ENTRY_ADDRESS = 0x7FACC0;
+
+// The operand after A1 is a linked address, so a game laid out differently fails this compare and the patch is
+// refused.
+static constexpr unsigned char g_aExpectedPixelShaderPrologue[] =
+{
+    0x8B, 0x54, 0x24, 0x08,             // mov edx, [esp+8]
+    0xA1, 0x28, 0x7C, 0xC9, 0x00,       // mov eax, ds:__RwD3DDevice
+    0x52,                               // push edx
+    0x8B, 0x54, 0x24, 0x08,             // mov edx, [esp+8]
+    0x8B, 0x08                          // mov ecx, [eax]
+};
+
+static_assert( sizeof( g_aExpectedPixelShaderPrologue ) == 16,
+               "the install time check compares sixteen bytes of the entry, so a list that was trimmed is caught "
+               "here instead of padding with zeros and refusing a game this hook was built for" );
+
 void CRwD3DEngine::PatchGame()
 {
-
-    RedirectCall( 0x816007, createPixelShader );
-    RedirectCall( 0x816016, createPixelShader );
-    RedirectCall( 0x816025, createPixelShader );
-    RedirectCall( 0x816034, createPixelShader );
-    RedirectCall( 0x816043, createPixelShader );
-    RedirectCall( 0x816052, createPixelShader );
+    // Six call sites reach this entry, so hooking it covers all of them. Excluded from both build files, so nothing
+    // calls this today. Tested in the order FindRender2dPass uses, since this address takes a branch: a readable but
+    // non executable page would take the write and fault on the first draw. Classified because the reasons differ -
+    // outside the image is another build, relocated is the right one loaded elsewhere, unknown means no answer.
+    switch ( ClassifyHostImage( reinterpret_cast<const void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                                sizeof( g_aExpectedPixelShaderPrologue ) ) )
+    {
+    case EHostImage::Contained:
+        break;
+    case EHostImage::Outside:
+        ReportPatchFailure( "Pixel shader hook", reinterpret_cast<void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                            "is not inside this executable's own image, so the entry was left alone" );
+        return;
+    case EHostImage::Relocated:
+        ReportPatchFailure( "Pixel shader hook", reinterpret_cast<void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                            "is a link time address while the executable is loaded somewhere other than where it was "
+                            "linked, so it names something else and the entry was left alone" );
+        return;
+    case EHostImage::Unknown:
+        ReportPatchFailure( "Pixel shader hook", reinterpret_cast<void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                            "could not be checked against this executable's image because that image's headers could "
+                            "not be read, so the entry was left alone" );
+        return;
+    }
+    if ( !IsExecutableRange( reinterpret_cast<const void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                             sizeof( g_aExpectedPixelShaderPrologue ) ) )
+    {
+        ReportPatchFailure( "Pixel shader hook", reinterpret_cast<void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                            "is not an address this process can execute, so the entry was left alone" );
+        return;
+    }
+    if ( !IsReadableRange( reinterpret_cast<const void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                           sizeof( g_aExpectedPixelShaderPrologue ) ) )
+    {
+        ReportPatchFailure( "Pixel shader hook", reinterpret_cast<void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                            "is not readable memory this process has committed, so the entry was left alone" );
+        return;
+    }
+    if ( HoldsOwnBranch( PIXEL_SHADER_ENTRY_ADDRESS, REL32_JUMP_OPCODE,
+                         reinterpret_cast<void *>( createPixelShader ) ) )
+        return;
+    if ( !HoldsExpectedBytes( PIXEL_SHADER_ENTRY_ADDRESS, g_aExpectedPixelShaderPrologue,
+                              sizeof( g_aExpectedPixelShaderPrologue ) ) )
+    {
+        ReportPatchFailure( "Pixel shader hook", reinterpret_cast<void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
+                            "does not hold the pixel shader entry this hook was built for, so nothing was "
+                            "written there" );
+        return;
+    }
+    RedirectJump( PIXEL_SHADER_ENTRY_ADDRESS, reinterpret_cast<void *>( createPixelShader ) );
 }
 
 bool CRwD3DEngine::Im2DRenderPrimitive( RwPrimitiveType primType,

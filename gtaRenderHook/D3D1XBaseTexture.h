@@ -7,21 +7,26 @@ enum class eTextureDimension
     TT_3D
 };
 
+// Deleted through its own pointer type if a caller ever holds one, and a polymorphic type without a virtual
+// destructor is undefined at that point.
 class ID3D1XRenderTargetViewable
 {
 public:
+    virtual ~ID3D1XRenderTargetViewable() = default;
     virtual ID3D11RenderTargetView* GetRenderTargetView() const = 0;
 };
 
 class ID3D1XDepthStencilViewable
 {
 public:
+    virtual ~ID3D1XDepthStencilViewable() = default;
     virtual ID3D11DepthStencilView* GetDepthStencilView() const = 0;
 };
 
 class ID3D1XShaderViewable
 {
   public:
+    virtual ~ID3D1XShaderViewable() = default;
     virtual ID3D11ShaderResourceView *GetShaderResourceView() const = 0;
 };
 
@@ -33,6 +38,7 @@ class ID3D1XShaderViewable
 class ID3D1XUnorderedAccessViewable
 {
   public:
+    virtual ~ID3D1XUnorderedAccessViewable() = default;
     virtual ID3D11UnorderedAccessView *GetUnorderedAccessView() const = 0;
 };
 
