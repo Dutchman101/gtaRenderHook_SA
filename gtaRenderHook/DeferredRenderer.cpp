@@ -220,7 +220,8 @@ void CDeferredRenderer::RenderOutput()
 
     m_pShadowRenderer->SetShadowBuffer();
 
-    // Render sun directional light if required
+    // Guard off on purpose: SunLightingPS also writes the ambient radiance, scaled by saturate(1 - daylight + 0.2),
+    // so skipping it indoors leaves the raster holding the previous frame. The sun term is already 0 there.
     // if (g_shaderRenderStateBuffer.vSunDir.w > 0&&CGame::currArea==0)
     //{
     m_pSunLightingPS->Set();
@@ -281,6 +282,8 @@ void CDeferredRenderer::RenderOutput()
     g_pStateMgr->FlushRenderTargets();
     g_pStateMgr->SetRaster( m_pFinalRasters[m_uiCurrentFinalRaster] );
     g_pStateMgr->SetRaster( m_aDeferredRasters[1], 1 );
+    // Left out on purpose, and the slot mismatch is not the reason: this pass reads the atlas through txShadow at t3,
+    // SetShadowBuffer binds slot 4, and UnsetShadowBuffer above already released it. Repairing that changes the draw.
     // m_pShadowRenderer->SetShadowBuffer();
     m_pAtmospherePassPS->Set();
     CFullscreenQuad::Draw();

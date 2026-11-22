@@ -46,15 +46,15 @@ void CGTASAHooks::Patch()
     RedirectJump( 0x7460A0, GetBestRefreshRate );
 
     RedirectJump( 0x7000E0, AddLight );
-    RedirectCall( 0x6E27E6, AddLightNoSpot );// fix for original car spotlights
+    InstallCall( 0x6E27E6, AddLightNoSpot );// fix for original car spotlights
 
     RedirectJump( 0x6E0E20, AddSpotLight );
     RedirectJump( 0x585700, RenderRadar );
     RedirectJump( 0x586D4E, RenderRadarMap );
 
     // GTA stuff
-    RedirectCall( 0x5BD76F, InitWithRW );
-    RedirectCall( 0x53BBA2, ShutdownWithRW );
+    InstallCall( 0x5BD76F, InitWithRW );
+    InstallCall( 0x53BBA2, ShutdownWithRW );
 }
 
 
@@ -187,7 +187,8 @@ void CGTASAHooks::RenderRadarMap()
 {
     CRadar::DrawRadarMap();
     g_pRwCustomEngine->RenderStateSet( rwRENDERSTATESTENCILENABLE, 0 );
-    //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEALPHATESTFUNCTION, rwALPHATESTFUNCTIONGREATEREQUAL);
+    // Set first: the enable writes m_currentAlphaTestType back, which would otherwise carry the last material's type.
+    g_pStateMgr->SetAlphaTestFunc( rwALPHATESTFUNCTIONGREATEREQUAL );
     g_pStateMgr->SetAlphaTestEnable( true );
     g_pRwCustomEngine->RenderStateSet( rwRENDERSTATEVERTEXALPHAENABLE, 1 );
 }

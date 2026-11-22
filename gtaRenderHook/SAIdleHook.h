@@ -5,6 +5,7 @@
 #include "AntTweakBar.h"
 
 // gta functions
+// Each macro is named for the function at its address, so the name can be checked against the listing.
 
 #define CTimer__GetTimeMillisecondsFromStart() ((size_t  (__cdecl *)())0x53BAD0)()
 // 0xB72CA8 holds the millisecond reading the original idle subtracts to pace frames, rewritten each frame. It isnt
@@ -32,11 +33,11 @@
 #define DoFade() ((void (__cdecl *)())0x53E600)()
 #define CHud__DrawAfterFade() ((void (__cdecl *)())0x58D490)()
 #define CMessages__Display(priority) ((void (__cdecl *)(char))0x69EFC0)(priority)
-#define CFont__RenderFontBuffer() ((int (__cdecl *)())0x71A210)()
+#define CFont__DrawFonts() ((int (__cdecl *)())0x71A210)()
 #define CCredits__Render() ((void (__cdecl *)())0x5A87F0)()
 #define DebugDisplayTextBuffer() ((void (__cdecl *)())0x532260)()
 #define FlushObrsPrintfs() ((void (__cdecl *)())0x734640)()
-#define DoRWRenderHorizon() ((void (__cdecl *)())0x7178F0)()
+#define CMovingThings__Render_BeforeClouds() ((void (__cdecl *)())0x7178F0)()
 #define RenderClouds() ((void (__cdecl *)())0x713950)()
 #define CRenderer__RenderRoads() ((void (__cdecl *)())0x553A10)()
 #define RenderCoronasReflections() ((void (__cdecl *)())0x6FB630)()
@@ -45,13 +46,16 @@
 //#define RenderFadingInUnderwaterEntities() ((void (__cdecl *)())0x553220)()
 
 #define CRenderer__RenderFadingInEntities() ((void (__cdecl *)())0x5531E0)()
-#define CVisibilityPlugins__RenderFadingInEntities() ((void (__cdecl *)())0x733F10)()
+#define CVisibilityPlugins__RenderFadingEntities() ((void (__cdecl *)())0x733F10)()
 #define RenderStaticShadows() ((void (__cdecl *)())0x708300)()
 #define RenderStoredShadows() ((void (__cdecl *)())0x70A960)()
 #define RenderGrass() ((void (__cdecl *)())0x5DBAE0)()
-#define RenderRainStreaks() ((void (__cdecl *)())0x72AF70)()
-#define RenderStencil() ((unsigned char (__cdecl *)())0x7113B0)()
-#define FindPlayerPos(outvec,id) ((RwV3d* (__cdecl *)(RwV3d*, int))0x56E010)(outvec,id)
+// Prefixed because CWeather.h declares RenderRainStreaks itself, and a bare macro would rewrite that declaration.
+#define CWeather__RenderRainStreaks() ((void (__cdecl *)())0x72AF70)()
+// The listing shows int __gRenderStencil(void) here, not the byte the name suggests.
+#define RenderStencil() ((int (__cdecl *)())0x7113B0)()
+// FindPlayerCoors takes its return slot as a hidden first argument, so the two argument form below is the real one.
+#define FindPlayerCoorsInto(outvec,playerIndex) ((RwV3d* (__cdecl *)(RwV3d*, int))0x56E010)(outvec,playerIndex)
 
 typedef void CAudioEngine;
 typedef void CShadowManager;

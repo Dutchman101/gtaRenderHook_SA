@@ -60,6 +60,7 @@ float&				CRendererRH::ms_lowLodDistScale = *(float*)0x8CD804;
 float&				CRendererRH::ms_fFarClipPlane = *(float*)0xB76848;
 bool CRendererRH::TOBJpass = false;
 bool CRendererRH::FadingPass = false;
+// Neither list is filled: both adds forward to the game, so a loop over them draws nothing.
 std::list<CEntity*> CRendererRH::ms_aVisibleEntities{};
 std::list<CEntity*> CRendererRH::ms_aVisibleLods{};
 std::vector<CEntity*> CRendererRH::ms_aVisibleShadowCasters[4] = { {}, {},{},{} };
@@ -93,10 +94,9 @@ void CRendererRH::UpdateVisibleListPointers()
 
 void CRendererRH::RenderRoads()
 {
-    // Set road render-states.
+    // Every visible entity goes through RenderOneNonRoad, so nothing here is split by type.
     //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEFOGENABLE, 1);
     //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEVERTEXALPHAENABLE, 1);
-    // Draw roads.
     //if (ms_nNoOfVisibleEntities == 0) {
     for ( auto entity : ms_aVisibleEntities )
     {
@@ -105,6 +105,7 @@ void CRendererRH::RenderRoads()
         RenderOneNonRoad( entity );
         //}
     }
+    // The road path is unused: RenderOneRoad wraps the game's own road renderer.
     //for (auto entity : ms_aVisibleLods)
     //	RenderOneRoad(entity);
     //}
@@ -128,23 +129,29 @@ void CRendererRH::RenderRoads()
 
 void CRendererRH::RenderCubemapEntities()
 {
-    g_pStateMgr->SetAlphaTestEnable( true );
+    // The reference set below displaces whatever the previous pass left, and nothing restores it until DefinedState
+    // runs after the G-buffer pass. Captured and put back per face, since this is the per face callback.
+    const UINT uiSavedAlphaTestRef = g_pStateMgr->GetAlphaTestRef();
+    // Before the enable, which is what uploads the buffer; the other order leaves the first face stale.
     g_pStateMgr->SetAlphaTestRef( 0.8f );
+    g_pStateMgr->SetAlphaTestEnable( true );
     for ( auto entity : ms_aVisibleReflectionObjects )
         RenderReflectionEntity( entity );
+    // GetAlphaTestRef reports the 0 to 255 value the shader tests, so it goes back in the same units.
+    g_pStateMgr->SetAlphaTestRef( static_cast<float>( uiSavedAlphaTestRef ) / 255.0f );
 }
 
 void CRendererRH::RenderEverythingBarRoads()
 {
+    // Nothing to draw: RenderRoads already walks every visible entity through RenderOneNonRoad. Restoring the loop
+    // below without taking those entities out of RenderRoads first would draw them twice.
     //for (size_t i = 0; i < ms_nNoOfVisibleEntities; ++i)
     //	RenderOneNonRoad(ms_aVisibleEntityPtrs[i]);
-
-    // Set non-road render-states.
-    // Draw non-roads.
 }
 
 void CRendererRH::RenderTOBJs()
 {
+    // Type 3 entities, drawn through 0x553230 which the map labels RenderOneRoad. Nothing calls this.
     TOBJpass = true;
     for ( size_t i = 0; i < ms_nNoOfVisibleEntities; ++i )
     {
@@ -176,7 +183,7 @@ void CRendererRH::RenderShadowCascade( int i )
 
 void CRendererRH::ConstructShadowList()
 {
-    // First get true BBox depth
+    // Empty, and nothing calls it: casters are added while the world is scanned.
 }
 
 
@@ -218,12 +225,12 @@ void CRendererRH::ConstructRenderList()
 
 void CRendererRH::RenderFadingInEntities()
 {
-    // Set fading entity render-states.
-    // Draw fading entities.
+    // Empty, and nothing calls it: the game draws fading entities in CVisibilityPlugins::RenderFadingEntities.
 }
 
 void CRendererRH::AddEntityToRenderList( CEntity * entity, float renderDistance )
 {
+    // The only append to ms_aVisibleEntities is commented out below, so it stays empty.
     /*if (ms_nNoOfVisibleEntities < 1000) {
         ms_aVisibleEntityPtrs[ms_nNoOfVisibleEntities] = entity;
         ms_nNoOfVisibleEntities++;

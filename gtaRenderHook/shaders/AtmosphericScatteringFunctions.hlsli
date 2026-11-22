@@ -7,6 +7,10 @@
 
 static const float g_fAtmosphereHeight = 8000.0f;
 static const float g_fThickAtmosphereHeight = 1200.0f;
+// Sun disc shape as cosines of the angle from the sun direction: full at about 0.81 degrees out, faded to nothing at
+// about 1.6. Smaller cosine is the wider angle.
+static const float g_fSunDiscCoreCos = 0.99990f;
+static const float g_fSunDiscEdgeCos = 0.99960f;
 
 /*!
 	Rayleigh density at given height
@@ -76,7 +80,9 @@ float3 GetSkyColor(float3 ViewDir, float3 LightDir, float3 FullScattering)
 
     // Compute sky color at skydome by blending scattering with sun disk
     float3 SunDiskColor = max(FullScattering, vSunColor.rgb * vSunColor.a);
-    float SunDiskCoeff = CosPhi>0.9999f?1.0f:0.0f;
+    // Feathered between core and edge, so the rim is not a single aliased sample.
+    float SunDiskCoeff = smoothstep(g_fSunDiscEdgeCos, g_fSunDiscCoreCos, CosPhi);
     
     return lerp(FullScattering, SunDiskColor, SunDiskCoeff * vSunLightDir.w);
 }
+

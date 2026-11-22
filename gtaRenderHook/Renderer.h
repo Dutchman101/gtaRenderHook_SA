@@ -47,8 +47,7 @@ class CRendererRH
 {
 public:
     /*!
-        Renders all road entities.
-        This was used by R* because of corona reflections rendered after that.
+        Draws every visible entity through the non-road path; nothing here is filtered by type.
     */
     static void RenderRoads();
     /*!
@@ -56,7 +55,7 @@ public:
     */
     static void RenderCubemapEntities();
     /*!
-        Renders all non-road entities.
+        Draws nothing: RenderRoads already draws every visible entity through the non-road path.
     */
     static void RenderEverythingBarRoads();
     /*!
@@ -68,7 +67,7 @@ public:
     */
     static void RenderShadowCascade( int i );
     /*!
-        Deprecated, to be removed
+        Deprecated, and nothing calls it. Casters are added while the world is scanned.
     */
     static void ConstructShadowList();
     /*!
@@ -76,7 +75,7 @@ public:
     */
     static void ConstructRenderList();
     /*!
-        Renders fading in all entities(LOD transitions)
+        Draws nothing, and nothing calls it: the game draws fading entities in CVisibilityPlugins::RenderFadingEntities.
     */
     static void RenderFadingInEntities();
     /*!

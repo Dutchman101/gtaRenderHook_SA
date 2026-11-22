@@ -30,6 +30,7 @@
 #include <game_sa\CTimer.h>
 #include <game_sa\CStreaming.h>
 #include <game_sa\CClouds.h>
+#include <game_sa\CWeather.h>
 #include <game_sa\CWeaponEffects.h>
 #include <game_sa\CSpecialFX.h>
 #include <game_sa\CCoronas.h>
@@ -408,6 +409,15 @@ static void ReportIdleTailDivergence()
 // Settled once, since the store runs every frame.
 static bool g_bDayNightBalanceStorable = false;
 
+// Target of the hook this one displaced, decoded at install time. Zero means the entry held the game's own code.
+static std::atomic<UINT_PTR> s_ullChainedIdleTarget{ 0 };
+
+static constexpr char IDLE_CHAIN_INSTALL_REPORT_FORMAT[] =
+    "Idle hook: the idle entry already held another module's hook, so its target at %08X is kept and called when the "
+    "idle hook is switched off rather than lost with the site, while this plugin's pipeline is the frame";
+// %08X is eight characters for any unsigned int this can hold.
+constexpr size_t HEX_32_BIT_TEXT_LENGTH = 8;
+
 void CSAIdleHook::Patch()
 {
     (void)Render2dPass();
@@ -452,8 +462,8 @@ void CSAIdleHook::Patch()
                 g_pDebug->printError( "Grass hook: the plant colour callback is not the function this hook was built "
                                       "for at an address this process can execute inside its own image, so the game "
                                       "keeps the callback it set up itself" );
-            else if ( !SetPointer( GRASS_CALLBACK_SITE + PUSH_IMM32_OPCODE_LENGTH,
-                                   reinterpret_cast<void *>( SetGrassMaterialColour ) ) )
+            else if ( SetPointer( GRASS_CALLBACK_SITE + PUSH_IMM32_OPCODE_LENGTH,
+                                  reinterpret_cast<void *>( SetGrassMaterialColour ) ) == EWriteResult::Failed )
                 g_pDebug->printError( "Grass hook: the site the plant colour callback is written to could not be "
                                       "made writable, so the game keeps the callback it set up itself" );
         }
@@ -488,16 +498,13 @@ void CSAIdleHook::Patch()
     {
         if ( HoldsOwnBranch( IDLE_FUNCTION_ADDRESS, REL32_JUMP_OPCODE, reinterpret_cast<void *>( &Idle ) ) )
             return;
-        if ( pIdle[0] == REL32_JUMP_OPCODE )
+        // Another module's hook owns this entry, so take the site and keep its target for the chain.
+        if ( pIdle[0] != REL32_JUMP_OPCODE )
         {
-            g_pDebug->printError( "Idle hook: the idle function's entry already jumps somewhere else, so another "
-                                  "hook or another copy of this plugin owns it and this copy's frame pipeline "
-                                  "will not run" );
+            g_pDebug->printError( "Idle hook: this executable's idle function is not the one the hook was built "
+                                  "for, so it was left alone and this plugin's frame pipeline will not run" );
             return;
         }
-        g_pDebug->printError( "Idle hook: this executable's idle function is not the one the hook was built "
-                              "for, so it was left alone and this plugin's frame pipeline will not run" );
-        return;
     }
     // Past the verified window a difference is reported and the redirect goes ahead; those bytes carry no address.
     else if ( CompareExpectedBytes( IDLE_FUNCTION_ADDRESS, g_aExpectedIdlePrologue, IDLE_PROLOGUE_LENGTH ) !=
@@ -517,8 +524,10 @@ void CSAIdleHook::Patch()
         return;
     }
 
-    // Checked rather than the bool, since a write the processor wasnt told about would read as a clean install.
-    switch ( RedirectJumpChecked( IDLE_FUNCTION_ADDRESS, reinterpret_cast<void *>( Idle ) ) )
+    UINT_PTR ullChainedIdle = 0;
+    const EWriteResult idleInstall =
+        RedirectJump( IDLE_FUNCTION_ADDRESS, reinterpret_cast<void *>( Idle ), &ullChainedIdle );
+    switch ( idleInstall )
     {
     case EWriteResult::Failed:
         g_pDebug->printError( "Idle hook: the idle function's entry could not be given this hook's jump, so this "
@@ -531,6 +540,18 @@ void CSAIdleHook::Patch()
         break;
     case EWriteResult::Clean:
         break;
+    }
+    // Only for a chain this call installed: InstallJump writes the target only when the write landed.
+    if ( idleInstall != EWriteResult::Failed && ullChainedIdle != 0 )
+    {
+        s_ullChainedIdleTarget.store( ullChainedIdle, std::memory_order_release );
+        char report[256];
+        // Fail the build if the text or its conversion count outgrows the buffer, rather than losing the end.
+        static_assert( sizeof( report ) >= sizeof( IDLE_CHAIN_INSTALL_REPORT_FORMAT ) - 1 + HEX_32_BIT_TEXT_LENGTH,
+                       "the chain install report has to fit the buffer it is written to, or its end is lost" );
+        _snprintf_s( report, sizeof( report ), _TRUNCATE, IDLE_CHAIN_INSTALL_REPORT_FORMAT,
+                     static_cast<unsigned int>( ullChainedIdle ) );
+        g_pDebug->printError( report );
     }
 }
 
@@ -835,7 +856,12 @@ void CSAIdleHook::Idle( void *Data )
             if ( !FrontEndMenuManager.m_bMenuActive )
                 CTimer::m_UserPause = false;
         }
-        _Idle( Data );
+        // The hook this install displaced is only reachable through this entry, so the frame is handed over here.
+        const UINT_PTR ullDisabledChain = s_ullChainedIdleTarget.load( std::memory_order_acquire );
+        if ( ullDisabledChain != 0 )
+            reinterpret_cast<void ( * )( void * )>( ullDisabledChain )( Data );
+        else
+            _Idle( Data );
         SettingsHolder::Instance()->DrawGUI();
         return;
     }
@@ -845,6 +871,9 @@ void CSAIdleHook::Idle( void *Data )
         ReportIdleFrameAbandoned( "the idle entry was called with no data argument" );
         return;
     }
+    // The displaced hook is not called here. It was displaced from this entry, so it either runs an idle of its own
+    // or resumes into the game's own idle body through its trampoline, and the updates below would then advance the
+    // same frame a second time. The pass-through branch above is where that handover belongs.
     SettingsHolder::Instance()->ReloadShadersIfRequired();
     // Update timers
     TimeUpdate();
@@ -963,6 +992,10 @@ void CSAIdleHook::UpdateShadowDNBalance()
         *(float*)( GAME_DAY_NIGHT_BALANCE_ADDR ) = fBalance;
 }
 
+// Not m_fSpriteBrightness: timecyc.dat stores 0 for it on 6 of 23 Midday rows, which would extinguish the disc and
+// the volumetric sun rays. Above 1 because the tonemap follows.
+constexpr float SUN_DISC_ALPHA = 4.5f;
+
 // Render one game frame
 void CSAIdleHook::RenderInGame()
 {
@@ -987,18 +1020,22 @@ void CSAIdleHook::RenderInGame()
     const auto curr_sun_dir = *reinterpret_cast<int*>( 0xB79FD0 );	// Current sun direction id
     const auto curr_sun_dirvec = &sunDirs[curr_sun_dir];			// Current sun direction vector
 
-    g_pStateMgr->SetSunDir( curr_sun_dirvec, ( CGame::currArea == 0 ? m_fShadowDNBalance : 1.0f ) );
-    g_pStateMgr->SetFogStart( CTimeCycle::m_CurrentColours.m_fFogStart );
-    g_pStateMgr->SetFogRange( CTimeCycle::m_CurrentColours.m_fFarClip - CTimeCycle::m_CurrentColours.m_fFogStart );
     g_shaderRenderStateBuffer.vSkyLightCol = { CTimeCycle::m_CurrentColours.m_nSkyTopRed / 255.0f,
                                         CTimeCycle::m_CurrentColours.m_nSkyTopGreen / 255.0f,
                                         CTimeCycle::m_CurrentColours.m_nSkyTopBlue / 255.0f,1.0f };
     g_shaderRenderStateBuffer.vHorizonCol = { CTimeCycle::m_CurrentColours.m_nSkyBottomRed / 255.0f,
                                     CTimeCycle::m_CurrentColours.m_nSkyBottomGreen / 255.0f,
                                     CTimeCycle::m_CurrentColours.m_nSkyBottomBlue / 255.0f,1.0f };
+    // Whitens the horizon while CWeather::LightningFlash is set, as the game's own idle did.
+    if ( CWeather::LightningFlash )
+    {
+        g_shaderRenderStateBuffer.vSkyLightCol = { 1.0f, 1.0f, 1.0f, 1.0f };
+        g_shaderRenderStateBuffer.vHorizonCol  = { 1.0f, 1.0f, 1.0f, 1.0f };
+    }
     g_shaderRenderStateBuffer.vSunColor = { CTimeCycle::m_CurrentColours.m_nSunCoreRed / 255.0f,
                                     CTimeCycle::m_CurrentColours.m_nSunCoreGreen / 255.0f,
-                                    CTimeCycle::m_CurrentColours.m_nSunCoreBlue / 255.0f, 4.5f/*Timecycle->m_fCurrentSpriteBrightness */ };
+                                    CTimeCycle::m_CurrentColours.m_nSunCoreBlue / 255.0f,
+                                    SUN_DISC_ALPHA };
     g_shaderRenderStateBuffer.vWaterColor = { CTimeCycle::m_CurrentColours.m_fWaterRed / 255.0f,
                                     CTimeCycle::m_CurrentColours.m_fWaterGreen / 255.0f ,
                                     CTimeCycle::m_CurrentColours.m_fWaterBlue / 255.0f,
@@ -1013,7 +1050,12 @@ void CSAIdleHook::RenderInGame()
                                         CTimeCycle::m_CurrentColours.m_fPostFx2Alpha / 255.0f };
     g_shaderRenderStateBuffer.fFarClip = Scene.m_pRwCamera->farPlane;
 
-    // First forward pass(clouds, sky etc.)
+    // After the writes above: each of these hands the whole constant buffer to the GPU, so the last one carries everything.
+    g_pStateMgr->SetSunDir( curr_sun_dirvec, ( CGame::currArea == 0 ? m_fShadowDNBalance : 1.0f ) );
+    g_pStateMgr->SetFogStart( CTimeCycle::m_CurrentColours.m_fFogStart );
+    g_pStateMgr->SetFogRange( CTimeCycle::m_CurrentColours.m_fFarClip - CTimeCycle::m_CurrentColours.m_fFogStart );
+
+    // Empty; kept as the insertion point for a pass that must run before the deferred pass.
     RenderForwardBeforeDeferred();
 
     g_pDeferredRenderer->m_pShadowRenderer->m_bShadowHistoryValid = g_pDeferredRenderer->m_pShadowRenderer->m_bShadowsRendered;
@@ -1082,7 +1124,7 @@ void CSAIdleHook::RenderInGame()
     g_pDeferredRenderer->RenderTonemappedOutput(); //TODO fix
     renderer->EndDebugEvent();
     //g_pRwCustomEngine->SetRenderTargets( &Scene.m_pRwCamera->frameBuffer,
-    //                                     Scene.m_pRwCamera->zBuffer, 1 );
+    //                                     Scene.m_pRwCamera->zBuffer, 1 ); // the copy at the end of RenderTonemappedOutput binds both
     DebugRendering::Render();
     if ( gDebugSettings.GetToggleField( "DebugRenderTarget" ) &&
          gDebugSettings.DebugRenderTargetNumber < gDebugSettings.DebugRenderTargetList.size() && gDebugSettings.DebugRenderTargetList[gDebugSettings.DebugRenderTargetNumber] != nullptr )
@@ -1143,6 +1185,7 @@ void CSAIdleHook::RenderHUD()
 
 void CSAIdleHook::RenderForwardBeforeDeferred()
 {
+    // Empty: sky and clouds are drawn inside RenderOutput.
 }
 
 void CSAIdleHook::RenderForwardAfterDeferred()
@@ -1185,7 +1228,7 @@ void CSAIdleHook::RenderDeferred()
 {
     CVisibilityPluginsRH::ClearWeaponPedsList();
 
-    //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATECULLMODE, rwCULLMODECULLBACK);
+    //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATECULLMODE, rwCULLMODECULLBACK); // culling set by DefinedState and RenderOneNonRoad
     CRendererRH::RenderRoads();
     CRendererRH::RenderEverythingBarRoads();
     // FadingPass is scoped inside CVisibilityPluginsRH::RenderAlphaAtomic
@@ -1198,7 +1241,7 @@ void CSAIdleHook::RenderDeferred()
     // BreakManager_c::Render(1) moved to RenderForwardAfterDeferred for translucent breakables
     // CRenderer::RenderFadingInUnderwaterEntities
     CVisibilityPluginsRH::RenderWeaponPedsNoMuzzleFlash();
-    //CRenderer::RenderTOBJs();
+    //CRenderer::RenderTOBJs(); // drawn in RenderRoads via RenderOneNonRoad
     //CWaterLevel::RenderSeaBed();
 }
 
@@ -1210,7 +1253,7 @@ void CSAIdleHook::RenderForward()
 
 void CSAIdleHook::RenderEffects()
 {
-    //CClouds::Render();
+    //CClouds::Render(); // drawn by VolumetricCloudsRender and MovingFogRender
     CBirds::Render();
     //CSkidmarks::Render();
     CRopes::Render();
@@ -1223,7 +1266,7 @@ void CSAIdleHook::RenderEffects()
     renderer->BeginDebugEvent( L"Coronas rendering" );
     CCoronas::Render();
     renderer->EndDebugEvent();
-    //g_pStateMgr->SetAlphaTestEnable(true);
+    //g_pStateMgr->SetAlphaTestEnable(true); // alpha testing stays as the material draws last set it
     g_fx.Render( TheCamera.m_pRwCamera, 0 );
     //CWaterCannons::Render();
     //CWaterLevel::RenderWaterFog();
@@ -1244,12 +1287,12 @@ void CSAIdleHook::RenderEffects()
     }*/
     CSpecialFX::Render();
     //CVehicleRecording::Render();
-    //CPointLights::RenderFogEffect();
+    //CPointLights::RenderFogEffect(); // drawn by CLightManager in RenderOutput
     CRenderer::RenderFirstPersonVehicle();
-    //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEZTESTENABLE, 1);
+    //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEZTESTENABLE, 1); // already on: RenderInGame sets it before this pass
     //g_pRwCustomEngine->RenderStateSet(rwRENDERSTATEZWRITEENABLE, 1);
-    //CVisibilityPlugins__RenderWeaponPedsForPC();
-    //CPostEffects::Render();
+    //CVisibilityPlugins__RenderWeaponPedsForPC(); // drawn by CVisibilityPluginsRH in RenderDeferred
+    //CPostEffects::Render(); // the post chain runs in RenderTonemappedOutput
 }
 
 void CSAIdleHook::PrepareRealTimeShadows( const RwV3d &sundir )
@@ -1344,7 +1387,7 @@ void CSAIdleHook::Render2dStuffAfterFade()
 {
     CHud__DrawAfterFade();
     CMessages__Display( 0 ); // CMessages::Display
-    CFont__RenderFontBuffer();     // CFont::DrawFonts
+    CFont__DrawFonts();     // CFont::DrawFonts
     if ( CCredits__bCreditsGoing )
     {
         if ( !FrontEndMenuManager.m_bMenuActive )

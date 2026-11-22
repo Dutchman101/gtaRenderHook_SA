@@ -228,7 +228,8 @@ inline unsigned long PatchWriterToken()
     return s_ulToken;
 }
 
-// Every write so far, as (token << 32) | thread id, in one atomic so no two writers can cross the pairing.
+// Released after each write, so one contended write doesnt lock out every later writer.
+inline std::atomic<bool> g_bPatchWriterBusy{ false };
 inline std::atomic<unsigned long long> g_ullPatchWriter{ 0 };
 inline unsigned long long PatchWriterIdentity()
 {
@@ -239,6 +240,39 @@ inline unsigned long PatchWriterIdFromIdentity( unsigned long long identity )
 {
     return static_cast<unsigned long>( identity & 0xFFFFFFFFULL );
 }
+
+struct SPatchWriterSlot
+{
+    bool m_bHeld = false;
+
+    SPatchWriterSlot() = default;
+    SPatchWriterSlot( const SPatchWriterSlot & ) = delete;
+    SPatchWriterSlot & operator=( const SPatchWriterSlot & ) = delete;
+    ~SPatchWriterSlot()
+    {
+        Release();
+    }
+
+    bool Acquire( unsigned long long identity )
+    {
+        bool bExpected = false;
+        if ( !g_bPatchWriterBusy.compare_exchange_strong( bExpected, true, std::memory_order_acq_rel ) )
+            return false;
+        g_ullPatchWriter.store( identity, std::memory_order_relaxed );
+        m_bHeld = true;
+        return true;
+    }
+
+    // Identity cleared before busy, so the next taker cant have it wiped by this release.
+    void Release()
+    {
+        if ( !m_bHeld )
+            return;
+        m_bHeld = false;
+        g_ullPatchWriter.store( 0, std::memory_order_relaxed );
+        g_bPatchWriterBusy.store( false, std::memory_order_release );
+    }
+};
 
 template <typename TWriter>
 inline EWriteResult WriteProtected( const char *operation, void *address, SIZE_T size, TWriter write )
@@ -251,19 +285,23 @@ inline EWriteResult WriteProtected( const char *operation, void *address, SIZE_T
                                                  "would be given back after the write is not known" );
         return EWriteResult::Failed;
     }
-    // Another thread running the site mid copy would execute a torn instruction. Every writer reaches here from
-    // DllMain under the loader lock, and this record keeps that checked; it never clears, or two threads could
-    // take turns.
+    // Held across the copy: two threads rewriting one site leave a torn instruction.
     const unsigned long long ullWriter = PatchWriterIdentity();
-    unsigned long long ullRecordedWriter = 0;
-    if ( !g_ullPatchWriter.compare_exchange_strong( ullRecordedWriter, ullWriter ) &&
-         ullRecordedWriter != ullWriter )
+    SPatchWriterSlot writerSlot;
+    if ( !writerSlot.Acquire( ullWriter ) )
     {
-        char refusal[192];
-        _snprintf_s( refusal, sizeof( refusal ), _TRUNCATE,
-                     "was not written because thread %lu already holds this process's single write slot, so a write "
-                     "from thread %lu is refused rather than risked against it",
-                     PatchWriterIdFromIdentity( ullRecordedWriter ), PatchWriterIdFromIdentity( ullWriter ) );
+        const unsigned long long ullHolder = g_ullPatchWriter.load( std::memory_order_relaxed );
+        char refusal[256];
+        if ( ullHolder != 0 )
+            _snprintf_s( refusal, sizeof( refusal ), _TRUNCATE,
+                         "was not written because thread %lu holds this process's single write slot, so a write from "
+                         "thread %lu was refused rather than risk a torn instruction",
+                         PatchWriterIdFromIdentity( ullHolder ), PatchWriterIdFromIdentity( ullWriter ) );
+        else
+            _snprintf_s( refusal, sizeof( refusal ), _TRUNCATE,
+                         "was not written because another thread had just taken this process's single write slot, so a "
+                         "write from thread %lu was refused rather than risk a torn instruction",
+                         PatchWriterIdFromIdentity( ullWriter ) );
         ReportPatchFailure( operation, address, refusal );
         return EWriteResult::Failed;
     }
@@ -276,46 +314,43 @@ inline EWriteResult WriteProtected( const char *operation, void *address, SIZE_T
         ( !bGuarded && IsExecutableProtection( dwProtection ) ) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
     if ( !bAlreadyWritable && !VirtualProtect( address, size, dwWriteProtect, &protect[0] ) )
     {
+        // Released first, so this report runs with the slot free and a sink that patched is not refused it here.
+        writerSlot.Release();
         ReportPatchFailure( operation, address, "could not be made writable, so it was left as it was" );
         return EWriteResult::Failed;
     }
     write( address );
     // The CPU caches code bytes, so it has to be told, and the page has to go back to the protection it had.
-    bool bClean = true;
-    if ( !FlushInstructionCache( GetCurrentProcess(), address, size ) )
-    {
-        bClean = false;
+    const bool bFlushed = FlushInstructionCache( GetCurrentProcess(), address, size ) != FALSE;
+    // protect[0] still carries PAGE_GUARD, so the guard comes back with it.
+    const bool bRestored = bAlreadyWritable || VirtualProtect( address, size, protect[0], &protect[1] ) != FALSE;
+    // Released before reporting, so a sink that patched could take the slot.
+    writerSlot.Release();
+    if ( !bFlushed )
         ReportPatchWrittenNotClean( operation, address, "was written but the processor was not told it changed, so it "
                                                        "may keep using the copy it already had" );
-    }
-    // protect[0] carries PAGE_GUARD when the page had one, so handing it back restores the guard.
-    if ( !bAlreadyWritable && !VirtualProtect( address, size, protect[0], &protect[1] ) )
-    {
-        bClean = false;
+    if ( !bRestored )
         ReportPatchWrittenNotClean( operation, address, "was written but could not be given back its own protection, "
                                                        "so the page keeps the write access this call added" );
-    }
-    if ( !bClean )
+    if ( !bFlushed || !bRestored )
         return EWriteResult::WrittenNotClean;
     ReportPatchSuccess( operation, address );
     return EWriteResult::Clean;
 }
 
-// The bool answers whether the write was refused, not whether it finished cleanly; a caller that needs those apart
-// takes WriteProtected.
-inline bool Patch( const char *operation, void *address, const void *data, SIZE_T size )
+// The write's own result, not a bool: a bool cant tell a refusal from an unreported write.
+inline EWriteResult Patch( const char *operation, void *address, const void *data, SIZE_T size )
 {
     return WriteProtected( operation, address, size,
-                           [data, size] ( void *destination ) { memcpy( destination, data, size ); } ) !=
-           EWriteResult::Failed;
+                           [data, size] ( void *destination ) { memcpy( destination, data, size ); } );
 }
 
 // Unsigned: a signed value cant hold an address at or above 0x80000000, and the subtraction is defined wrap.
-inline bool SetPointer( UINT_PTR address, void *value )
+inline EWriteResult SetPointer( UINT_PTR address, void *value )
 {
     return Patch( "SetPointer", reinterpret_cast<void *>( address ), &value, sizeof( void * ) );
 }
-inline bool SetInt( UINT_PTR address, int value )
+inline EWriteResult SetInt( UINT_PTR address, int value )
 {
     return Patch( "SetInt", reinterpret_cast<void *>( address ), &value, sizeof( int ) );
 }
@@ -395,21 +430,21 @@ inline EWriteResult InstallCall( UINT_PTR address, void *func )
 {
     if ( !IsReadableRange( reinterpret_cast<const void *>( address ), REL32_BRANCH_LENGTH ) )
     {
-        ReportPatchFailure( "RedirectCall", reinterpret_cast<void *>( address ),
+        ReportPatchFailure( "InstallCall", reinterpret_cast<void *>( address ),
                             "is not five readable bytes inside one committed region, so no call was written "
                             "there" );
         return EWriteResult::Failed;
     }
     if ( *reinterpret_cast<const unsigned char *>( address ) != REL32_CALL_OPCODE )
     {
-        ReportPatchFailure( "RedirectCall", reinterpret_cast<void *>( address ),
+        ReportPatchFailure( "InstallCall", reinterpret_cast<void *>( address ),
                             "does not hold the call this hook replaces, so nothing was written there" );
         return EWriteResult::Failed;
     }
     // Readable is not executable, and only this test covers the bytes being code.
     if ( !IsExecutableRange( reinterpret_cast<const void *>( address ), REL32_BRANCH_LENGTH ) )
     {
-        ReportPatchFailure( "RedirectCall", reinterpret_cast<void *>( address ),
+        ReportPatchFailure( "InstallCall", reinterpret_cast<void *>( address ),
                             "is not memory this process can execute, so no call was written there" );
         return EWriteResult::Failed;
     }
@@ -422,16 +457,21 @@ inline EWriteResult InstallCall( UINT_PTR address, void *func )
     call[0] = REL32_CALL_OPCODE;
     memcpy( call + REL32_OPCODE_LENGTH, &rel, sizeof( rel ) );
     // WriteProtected directly, so an unseen write isnt flattened to a success.
-    return WriteProtected( "RedirectCall", reinterpret_cast<void *>( address ), sizeof( call ),
+    return WriteProtected( "InstallCall", reinterpret_cast<void *>( address ), sizeof( call ),
                            [&call] ( void *destination ) { memcpy( destination, call, sizeof( call ) ); } );
 }
 
-inline bool RedirectCall( UINT_PTR address, void *func )
+inline EWriteResult InstallJump( UINT_PTR address, void *func, UINT_PTR *pChainTarget = nullptr )
 {
-    return InstallCall( address, func ) != EWriteResult::Failed;
-}
-inline EWriteResult InstallJump( UINT_PTR address, void *func )
-{
+    // Tested before the site is read for a jump, so one site reaches one verdict.
+    if ( !IsExecutableRange( reinterpret_cast<const void *>( address ), REL32_BRANCH_LENGTH ) )
+    {
+        ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
+                            "is not memory this process can execute, so no jump was written there" );
+        return EWriteResult::Failed;
+    }
+    // Kept until the write lands, so a failed write never leaves the target naming a hook we didnt displace.
+    UINT_PTR ullChainTarget = 0;
     // Written as they are, without decoding what they replace. Anything resuming at address + 5 has to decode first.
     if ( IsReadableRange( reinterpret_cast<const void *>( address ), REL32_BRANCH_LENGTH ) &&
          *reinterpret_cast<const unsigned char *>( address ) == REL32_JUMP_OPCODE )
@@ -439,17 +479,46 @@ inline EWriteResult InstallJump( UINT_PTR address, void *func )
         const UINT_PTR existingTarget = address + REL32_BRANCH_LENGTH + ReadRel32Displacement( address );
         // This hooks own branch, so a second pass over an already patched image is a no-op rather than a rewrite.
         if ( existingTarget == reinterpret_cast<UINT_PTR>( func ) )
+        {
+            // Nothing displaced here, so the caller is told zero.
+            if ( pChainTarget != nullptr )
+                *pChainTarget = 0;
             return EWriteResult::Clean;
+        }
         // A jump leaving the host image isnt one of the executable's own thunks, so another module put it there.
         switch ( ClassifyHostImage( reinterpret_cast<const void *>( existingTarget ), REL32_BRANCH_LENGTH ) )
         {
         case EHostImage::Contained:
+            // In-image targets cannot be chained: calling one runs that code over the running frame.
+            if ( pChainTarget != nullptr )
+            {
+                ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
+                                    "already holds a jump to a target inside this executable's own image, which cannot "
+                                    "be chained, so that site was left in place rather than taken over without the "
+                                    "hook it holds" );
+                return EWriteResult::Failed;
+            }
             break;
         case EHostImage::Outside:
-            ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
-                                "already holds a jump that leaves this executable's image, so another module owns "
-                                "that site and its hook was left in place" );
-            return EWriteResult::Failed;
+            // Only a caller that can run the displaced hook asks to chain, so the others keep the refusal.
+            if ( pChainTarget == nullptr )
+            {
+                ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
+                                    "already holds a jump that leaves this executable's image, so another module owns "
+                                    "that site and its hook was left in place" );
+                return EWriteResult::Failed;
+            }
+            // Decoded from the site, so it names code only if that page is executable.
+            if ( !IsExecutableRange( reinterpret_cast<const void *>( existingTarget ), REL32_OPCODE_LENGTH ) )
+            {
+                ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
+                                    "already holds a jump that leaves this executable's image, but the place it jumps "
+                                    "to is not memory this process can execute, so that site was left in place rather "
+                                    "than taken over and then called" );
+                return EWriteResult::Failed;
+            }
+            ullChainTarget = existingTarget;
+            break;
         case EHostImage::Relocated:
             ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
                                 "already holds a jump whose target cannot be checked against this executable, because "
@@ -463,12 +532,6 @@ inline EWriteResult InstallJump( UINT_PTR address, void *func )
             return EWriteResult::Failed;
         }
     }
-    if ( !IsExecutableRange( reinterpret_cast<const void *>( address ), REL32_BRANCH_LENGTH ) )
-    {
-        ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
-                            "is not memory this process can execute, so no jump was written there" );
-        return EWriteResult::Failed;
-    }
     const uint32_t rel = EncodeRel32( address, func );
     unsigned char jump[REL32_BRANCH_LENGTH];
     static_assert( REL32_OPCODE_LENGTH + static_cast<int>( sizeof( rel ) ) == REL32_BRANCH_LENGTH,
@@ -476,16 +539,15 @@ inline EWriteResult InstallJump( UINT_PTR address, void *func )
                    "writes past it or leaves a byte of the site holding the old operand" );
     jump[0] = REL32_JUMP_OPCODE;
     memcpy( jump + REL32_OPCODE_LENGTH, &rel, sizeof( rel ) );
-    return WriteProtected( "RedirectJump", reinterpret_cast<void *>( address ), sizeof( jump ),
-                           [&jump] ( void *destination ) { memcpy( destination, jump, sizeof( jump ) ); } );
+    const EWriteResult result = WriteProtected( "RedirectJump", reinterpret_cast<void *>( address ), sizeof( jump ),
+                                                [&jump] ( void *destination ) { memcpy( destination, jump, sizeof( jump ) ); } );
+    // Published only for a write that landed, and only to a caller that asked.
+    if ( result != EWriteResult::Failed && pChainTarget != nullptr )
+        *pChainTarget = ullChainTarget;
+    return result;
 }
 
-inline EWriteResult RedirectJumpChecked( UINT_PTR address, void *func )
+inline EWriteResult RedirectJump( UINT_PTR address, void *func, UINT_PTR *pChainTarget = nullptr )
 {
-    return InstallJump( address, func );
-}
-
-inline bool RedirectJump( UINT_PTR address, void *func )
-{
-    return InstallJump( address, func ) != EWriteResult::Failed;
+    return InstallJump( address, func, pChainTarget );
 }

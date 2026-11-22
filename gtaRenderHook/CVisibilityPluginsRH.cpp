@@ -106,7 +106,7 @@ RpAtomic* CVisibilityPluginsRH::RenderAlphaAtomic( RpAtomic *atomic, int fadeAlp
 
 void CVisibilityPluginsRH::Patch()
 {
-    RedirectCall( 0x5E7859, AddPedWithWeapons );
+    InstallCall( 0x5E7859, AddPedWithWeapons );
     RedirectJump( 0x732480, RenderAlphaAtomic );
 }
 
