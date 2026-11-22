@@ -49,7 +49,11 @@ float4 TonemapPS(PS_QUAD_IN i) : SV_Target
                                 lerp(vGradingColor1.rgb, White, 1 - vGradingColor1.a), saturate(1-Luminance)) + 0.5f;
     ScreenColor *= GradingColor;
 #endif
-    return float4(ScreenColor, 1);
+
+    // Applied here and nowhere else. Both chains that present this frame hand the bytes to the display
+    // unchanged: the swap chain is created with a display mode format, and the MTA bridge draws the frame
+    // with the sampler decode and the write encode both switched off. A second copy double encodes it.
+    return float4( LinearToDisplaySpace( ScreenColor ), 1 );
 }
 
 /*!

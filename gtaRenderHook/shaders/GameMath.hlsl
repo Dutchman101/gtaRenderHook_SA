@@ -119,6 +119,15 @@ float3 DepthToWorldPos( float depth, float2 texCoord )
 
 float GetLuminance( float3 Color ) { return dot( g_vLuminance, Color ); }
 
+// Converts linear light to the non linear values that an 8-bit target and the display expect. Below
+// the join the curve is a straight line, so values close to black keep their steps instead of banding.
+float3 LinearToDisplaySpace( float3 LinearColor )
+{
+    const float3 LinearSegment = LinearColor * 12.92f;
+    const float3 CurveSegment  = 1.055f * pow( max( LinearColor, 0.0f ), 1.0f / 2.4f ) - 0.055f;
+    return saturate( lerp( CurveSegment, LinearSegment, step( LinearColor, 0.0031308f ) ) );
+}
+
 float Bayer4x4( float2 index )
 {
     const float4x4 Bayer = { float4( 1, 13, 4, 16 ), float4( 9, 5, 12, 8 ),
