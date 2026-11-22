@@ -27,6 +27,7 @@
 #include <game_sa\CWorld.h>
 #include <game_sa\CScene.h>
 #include <game_sa\CClock.h>
+#include <game_sa\CTimer.h>
 #include <game_sa\CStreaming.h>
 #include <game_sa\CClouds.h>
 #include <game_sa\CWeaponEffects.h>
@@ -244,8 +245,7 @@ __declspec( naked ) static void __cdecl IdleOriginalNaked( void * )
 #undef IDLE_RESUME_ADDRESS_IMM
 
 #define _Idle( ptr ) IdleOriginalNaked( ptr )
-// B7CB49     ; CTimer::m_UserPause
-#define CTimer__m_UserPause (*(bool *)0xB7CB49)	
+// Both pause flags come from the SDK's own unit, so this file keeps no copy of either address.
 #define CPostEffects__m_bDisableAllPostEffect (*(bool *)0xC402CF)	
 
 int drawCallCount = 0;
@@ -622,8 +622,139 @@ static void ReportIdleFrameAbandoned( const char *reason )
     g_pDebug->printError( report );
 }
 
+// GetScreenFadeStatus: 0 clear, 1 fading, 2 fully faded.
+constexpr int FADE_STATUS_FULLY_FADED = 2;
+
+// DoFade fades in only while StillToFadeOut is set and FadeOutTime has passed since FadeTimer was stamped.
+constexpr UINT_PTR TIMER_FUNCTION          = 0xB7CB28;
+constexpr UINT_PTR GAME_JUST_LOADED        = 0xC16EDC;
+constexpr UINT_PTR GAME_STILL_TO_FADE_OUT  = 0xC16EDD;
+constexpr UINT_PTR GAME_FADE_START_STAMP   = 0xC16EE0;
+constexpr UINT_PTR GAME_FADE_DELAY         = 0x8D2BD4;  // FadeOutTime, the fade-in delay, 1750 ms
+
+// Probe a fixed game address before reading it, so a wrong one costs a skipped report and not a fault on the game frame.
+static bool IsGameSampleReadable( UINT_PTR address, SIZE_T size )
+{
+    return IsInHostImage( reinterpret_cast<const void *>( address ), size ) &&
+           IsReadableRange( reinterpret_cast<const void *>( address ), size );
+}
+
+// Names a full fade with the menu closed, once every interval, so a short fade stays silent and a stuck one is nameable.
+static void ReportFullFadeFrame( bool bMenuActive, int iFadeStatus )
+{
+    constexpr unsigned long FULL_FADE_REPORT_INTERVAL = 600;
+    // Every write differs, so CDebug's dedupe never holds it back; the cap keeps a stuck fade from growing the log.
+    constexpr unsigned long FULL_FADE_REPORT_LIMIT = 3;
+    static unsigned long s_ulFullFadeFrames = 0;
+    static unsigned long s_ulFullFadeReports = 0;
+    static int s_iPauseAtStart = 0;
+
+    if ( bMenuActive || iFadeStatus != FADE_STATUS_FULLY_FADED )
+    {
+        s_ulFullFadeFrames  = 0;
+        s_ulFullFadeReports = 0;
+        return;
+    }
+    // Taken before the pause decision below, so this is the value the state started with.
+    if ( s_ulFullFadeFrames == 0 )
+        s_iPauseAtStart = CTimer::m_UserPause ? 1 : 0;
+    ++s_ulFullFadeFrames;
+    if ( s_ulFullFadeReports >= FULL_FADE_REPORT_LIMIT || !g_pDebug )
+        return;
+    if ( s_ulFullFadeFrames == 0 || s_ulFullFadeFrames % FULL_FADE_REPORT_INTERVAL != 0 )
+        return;
+    // Probed before the first read and outside the budget, so a wrong address costs one line, not a fault or a report.
+    if ( !IsGameSampleReadable( TIMER_FUNCTION, sizeof( unsigned int ) ) ||
+         !IsGameSampleReadable( GAME_FADE_START_STAMP, sizeof( unsigned int ) ) ||
+         !IsGameSampleReadable( GAME_FADE_DELAY, sizeof( unsigned int ) ) ||
+         !IsGameSampleReadable( GAME_JUST_LOADED, sizeof( unsigned char ) ) ||
+         !IsGameSampleReadable( GAME_STILL_TO_FADE_OUT, sizeof( unsigned char ) ) )
+    {
+        static bool s_bUnreadableSampleReported = false;
+        if ( !s_bUnreadableSampleReported && g_pDebug )
+        {
+            s_bUnreadableSampleReported = true;
+            g_pDebug->printError( "Idle hook: the menu is closed and the camera reports a full screen fade, but the "
+                                  "game state this report reads is not readable memory inside this executable's own "
+                                  "image, so the fade was not sampled; the frame is still drawn and paced" );
+        }
+        return;
+    }
+    // Both pause flags are clear here, so the fade state and its clock are what name the cause.
+    const float fAlpha    = TheCamera.m_fFadeAlpha;
+    const float fDuration = TheCamera.m_fFadeDuration;
+    const float fTimeStep = CTimer::ms_fTimeStep;
+    // ProcessFade tests this byte against 1, not non-zero, so the report matches it.
+    const unsigned char uchFadeRunning = *(const unsigned char *)&TheCamera.m_bFading;
+    // One read each, so this unsigned subtraction matches DoFade's and cant straddle two clock ticks.
+    const unsigned long ulStamp   = *(const unsigned int *)GAME_FADE_START_STAMP;
+    const unsigned long ulClock   = CTimer::m_snTimeInMilliseconds;
+    const unsigned long ulDelay   = *(const unsigned int *)GAME_FADE_DELAY;
+    const unsigned long ulElapsed = ulClock - ulStamp;
+    char report[1280];
+    _snprintf_s( report, sizeof( report ), _TRUNCATE,
+                 "Idle hook: the menu is closed and the camera reports screen fade status %d, so the world was drawn "
+                 "under the fade overlay for %lu frames; the fade alpha is %.0f of 255, the fade is %s, its "
+                 "direction is %d and its duration is %.0f ms; StillToFadeOut is %d, JustLoadedDontFadeInYet is %d, "
+                 "their start stamp is %lu, the millisecond clock now reads %lu so %lu ms have passed against the "
+                 "%lu ms delay that gates the fade-in, which %s; the fade start reading is %lu; CTimer::m_UserPause "
+                 "was %d when the state began and is %d now, m_CodePause is %d, ms_fTimeStep is %.0f thousandths, the "
+                 "timer function is %s, CTimer::Update has stepped its counter %lu times, its non-clipped clock "
+                 "accumulator reads %lu, its pause-mode accumulator reads %lu and the cycle count "
+                 "GetCyclesPerMillisecond reports is %lu, and CDraw::FadeValue is %d; at most %lu reports are "
+                 "made for one run of this state, after which it stays silent",
+                 iFadeStatus, s_ulFullFadeFrames,
+                 static_cast<double>( fAlpha ),
+                 uchFadeRunning == 1 ? "running" : "not running",
+                 static_cast<int>( TheCamera.m_nFadeInOutFlag ),
+                 static_cast<double>( fDuration * 1000.0f ),
+                 *(const unsigned char *)GAME_STILL_TO_FADE_OUT ? 1 : 0,
+                 *(const unsigned char *)GAME_JUST_LOADED ? 1 : 0,
+                 ulStamp, ulClock, ulElapsed, ulDelay,
+                 *(const unsigned char *)GAME_STILL_TO_FADE_OUT
+                     ? ( ulElapsed > ulDelay ? "is due" : "cannot start yet" )
+                     : "has no pending fade to start",
+                 static_cast<unsigned long>( TheCamera.m_nFadeStartTime ),
+                 s_iPauseAtStart, CTimer::m_UserPause ? 1 : 0, CTimer::m_CodePause ? 1 : 0,
+                 static_cast<double>( fTimeStep * 1000.0f ),
+                 *(const unsigned int *)TIMER_FUNCTION != 0 ? "set" : "null",
+                 static_cast<unsigned long>( CTimer::m_FrameCounter ),
+                 static_cast<unsigned long>( CTimer::m_snTimeInMillisecondsNonClipped ),
+                 static_cast<unsigned long>( CTimer::m_snTimeInMillisecondsPauseMode ),
+                 static_cast<unsigned long>( static_cast<unsigned int>( CTimer::GetCyclesPerMillisecond() ) ),
+                 static_cast<int>( CDraw::FadeValue ), FULL_FADE_REPORT_LIMIT );
+    g_pDebug->printError( report );
+    // Counted after the write, so a swallowed report doesnt spend one of the three.
+    ++s_ulFullFadeReports;
+}
+
 // Set while the bar's own pause stands in CTimer::m_UserPause; only touched inside a claimed frame.
 static bool s_bGuiPauseHeld = false;
+
+constexpr size_t WIDEST_32_BIT_DECIMAL = 11;
+
+// Counted from the text, so the allowance cant drift from the message it belongs to.
+static constexpr size_t CountConversions( const char *format, size_t length )
+{
+    size_t conversions = 0;
+    for ( size_t index = 0; index < length; ++index )
+        conversions += format[index] == '%' ? 1 : 0;
+    return conversions;
+}
+
+// Named so the buffer is checked against it at build time; a clipped message reads as if it ended there.
+static constexpr char IDLE_DROPPED_CALL_REPORT_FORMAT[] =
+    "Idle hook: the host called the idle entry from inside this plugin's frame at depth %u on "
+    "thread %lu, so the call was dropped rather than running a second complete frame%s; drop %lu "
+    "on this thread";
+
+static constexpr char IDLE_PASSTHROUGH_NOTE[] =
+    " (the surrounding frame is a pass-through, so the hook is off)";
+
+static constexpr char IDLE_CLAIM_REFUSAL_REPORT_FORMAT[] =
+    "Idle hook: the idle entry was called on thread %lu while thread %lu was inside a frame, so "
+    "that call was refused rather than running two frames at once; %lu refused since the last "
+    "report, the most recent pair named here";
 
 void CSAIdleHook::Idle( void *Data )
 {
@@ -639,12 +770,16 @@ void CSAIdleHook::Idle( void *Data )
         if ( ulDropped != 0 && ( ulDropped == 1 || ulDropped % IDLE_DROP_REPORT_INTERVAL == 0 ) )
         {
             char report[384];
-            _snprintf_s( report, sizeof( report ), _TRUNCATE,
-                         "Idle hook: the host called the idle entry from inside this plugin's frame at depth %u on "
-                         "thread %lu, so the call was dropped rather than running a second complete frame%s; drop %lu "
-                         "on this thread",
+            // Every conversion is charged a full integer, so this overstates the message and a longer one fails here.
+            static_assert( sizeof( report ) >= sizeof( IDLE_DROPPED_CALL_REPORT_FORMAT ) - 1 +
+                                                   CountConversions( IDLE_DROPPED_CALL_REPORT_FORMAT,
+                                                                     sizeof( IDLE_DROPPED_CALL_REPORT_FORMAT ) - 1 ) *
+                                                       WIDEST_32_BIT_DECIMAL +
+                                                   sizeof( IDLE_PASSTHROUGH_NOTE ) - 1,
+                           "the dropped call report has to fit the buffer it is written to, or its end is lost" );
+            _snprintf_s( report, sizeof( report ), _TRUNCATE, IDLE_DROPPED_CALL_REPORT_FORMAT,
                          g_uiIdleDepth, GetCurrentThreadId(),
-                         g_bFrameRunsHook ? "" : " (the surrounding frame is a pass-through, so the hook is off)",
+                         g_bFrameRunsHook ? "" : IDLE_PASSTHROUGH_NOTE,
                          ulDropped );
             if ( g_pDebug )
                 g_pDebug->printError( report );
@@ -672,10 +807,13 @@ void CSAIdleHook::Idle( void *Data )
         {
             const unsigned long long refusal = g_ullClaimRefusal.load( std::memory_order_relaxed );
             char report[320];
-            _snprintf_s( report, sizeof( report ), _TRUNCATE,
-                         "Idle hook: the idle entry was called on thread %lu while thread %lu was inside a frame, so "
-                         "that call was refused rather than running two frames at once; %lu refused since the last "
-                         "report, the most recent pair named here",
+            // As above: fail the build if the text or conversion count outgrows the buffer.
+            static_assert( sizeof( report ) >= sizeof( IDLE_CLAIM_REFUSAL_REPORT_FORMAT ) - 1 +
+                                                   CountConversions( IDLE_CLAIM_REFUSAL_REPORT_FORMAT,
+                                                                     sizeof( IDLE_CLAIM_REFUSAL_REPORT_FORMAT ) - 1 ) *
+                                                       WIDEST_32_BIT_DECIMAL,
+                           "the claim refusal report has to fit the buffer it is written to, or its end is lost" );
+            _snprintf_s( report, sizeof( report ), _TRUNCATE, IDLE_CLAIM_REFUSAL_REPORT_FORMAT,
                          static_cast<unsigned long>( refusal & 0xFFFFFFFFULL ),
                          static_cast<unsigned long>( refusal >> 32 ), ulRefusals );
             g_pDebug->printError( report );
@@ -695,7 +833,7 @@ void CSAIdleHook::Idle( void *Data )
         {
             s_bGuiPauseHeld = false;
             if ( !FrontEndMenuManager.m_bMenuActive )
-                CTimer__m_UserPause = false;
+                CTimer::m_UserPause = false;
         }
         _Idle( Data );
         SettingsHolder::Instance()->DrawGUI();
@@ -751,18 +889,27 @@ void CSAIdleHook::Idle( void *Data )
         PrepareRenderStuff();
     else if ( SettingsHolder::Instance()->IsGUIEnabled() )
         SettingsHolder::Instance()->DisableGUI();
-    // One predicate for both, since taken separately a screen fade outlasts the bar's draw test.
-    const bool bDrawFrame = !FrontEndMenuManager.m_bMenuActive && TheCamera.GetScreenFadeStatus() != 2;
-    // The menu owns this flag through its own start and end calls, so it is written only when the bar's state
-    // differs.
-    const bool bGuiWantsPause = bDrawFrame && SettingsHolder::Instance()->IsGUIEnabled();
-    // Taking the pause is unconditional, releasing it is not: the flag carries no owner.
-    const bool bWeHoldPause = s_bGuiPauseHeld;
-    if ( bGuiWantsPause != CTimer__m_UserPause &&
-         ( bGuiWantsPause || ( bWeHoldPause && !FrontEndMenuManager.m_bMenuActive ) ) )
-        CTimer__m_UserPause = bGuiWantsPause;
-    // Ownership follows the bar even when the write was withheld.
-    s_bGuiPauseHeld = bGuiWantsPause;
+    // Read once; the game owns this flag and can change it between two reads.
+    const bool bMenuActive  = FrontEndMenuManager.m_bMenuActive;
+    const int  iFadeStatus  = TheCamera.GetScreenFadeStatus();
+    // DoFade draws the fade as an overlay afterwards, so the world renders under it; a full fade is no reason to skip it.
+    const bool bDrawFrame = !bMenuActive;
+    // Fade clause stays: a pause stops the clock the fade advances on, and DoFade bails on the same flag before
+    // drawing its overlay, which would leave the world unblackened.
+    const bool bGuiWantsPause = bDrawFrame && iFadeStatus != FADE_STATUS_FULLY_FADED &&
+                                SettingsHolder::Instance()->IsGUIEnabled();
+    ReportFullFadeFrame( bMenuActive, iFadeStatus );
+    // Written when it differs and cleared only when this bar holds it; releasing every frame would drop the pause a
+    // menu's message loop takes.
+    const bool bWeHoldPause = s_bGuiPauseHeld && CTimer::m_UserPause;
+    if ( bGuiWantsPause != CTimer::m_UserPause &&
+         ( bGuiWantsPause || ( bWeHoldPause && !bMenuActive ) ) )
+    {
+        CTimer::m_UserPause = bGuiWantsPause;
+        s_bGuiPauseHeld     = bGuiWantsPause;
+    }
+    else
+        s_bGuiPauseHeld = bWeHoldPause;
     if ( bDrawFrame )
     {
         RenderInGame();
