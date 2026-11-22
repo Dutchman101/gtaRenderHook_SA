@@ -749,6 +749,43 @@ static void ReportFullFadeFrame( bool bMenuActive, int iFadeStatus )
     ++s_ulFullFadeReports;
 }
 
+// A save load is the only arming site, so without one the fade overlay never lifts. Setting the same two flags lets
+// DoFade run its own delay and fade.
+static void ArmStartUpFadeInIfTheGameNeverDid( bool bMenuActive, int iFadeStatus )
+{
+    if ( bMenuActive || iFadeStatus != FADE_STATUS_FULLY_FADED )
+        return;
+    // The reads prove the image too, so everything written below is already in the host image. IsWritableRange proves
+    // protection only, so the image test stays on the reads.
+    if ( !IsGameSampleReadable( GAME_FADE_START_STAMP, sizeof( unsigned int ) ) ||
+         !IsGameSampleReadable( GAME_JUST_LOADED, sizeof( unsigned char ) ) ||
+         !IsGameSampleReadable( GAME_STILL_TO_FADE_OUT, sizeof( unsigned char ) ) )
+        return;
+    if ( !IsWritableRange( reinterpret_cast<const void *>( GAME_JUST_LOADED ), sizeof( unsigned char ) ) ||
+         !IsWritableRange( reinterpret_cast<const void *>( GAME_STILL_TO_FADE_OUT ), sizeof( unsigned char ) ) )
+    {
+        static bool s_bUnwritableArmingReported = false;
+        if ( !s_bUnwritableArmingReported && g_pDebug )
+        {
+            g_pDebug->printError( "Screen fade: the two bytes the start up fade in is armed through are readable "
+                                  "inside this executable's own image but not writable, so nothing arms that fade "
+                                  "and the black the camera opened at stays over the world" );
+            // After the write, so a swallowed report doesnt spend this one.
+            s_bUnwritableArmingReported = true;
+        }
+        return;
+    }
+    if ( *(const unsigned int *)GAME_FADE_START_STAMP != 0 )
+        return;
+    if ( *(const unsigned char *)GAME_JUST_LOADED != 0 || *(const unsigned char *)GAME_STILL_TO_FADE_OUT != 0 )
+        return;
+    // ProcessFade tests this byte against 1, so a fade already running is left alone.
+    if ( *(const unsigned char *)&TheCamera.m_bFading == 1 )
+        return;
+    *(unsigned char *)( GAME_JUST_LOADED )       = 1;
+    *(unsigned char *)( GAME_STILL_TO_FADE_OUT ) = 1;
+}
+
 // Set while the bar's own pause stands in CTimer::m_UserPause; only touched inside a claimed frame.
 static bool s_bGuiPauseHeld = false;
 
@@ -923,8 +960,11 @@ void CSAIdleHook::Idle( void *Data )
     const int  iFadeStatus  = TheCamera.GetScreenFadeStatus();
     // DoFade draws the fade as an overlay afterwards, so the world renders under it; a full fade is no reason to skip it.
     const bool bDrawFrame = !bMenuActive;
+    // Before DoFade in RenderHUD, so the game is what runs the fade this starts.
+    ArmStartUpFadeInIfTheGameNeverDid( bMenuActive, iFadeStatus );
     // Fade clause stays: a pause stops the clock the fade advances on, and DoFade bails on the same flag before
-    // drawing its overlay, which would leave the world unblackened.
+    // drawing its overlay, which would leave the world unblackened. Also stops the arming above stalling, since that
+    // fade only advances on frames DoFade runs.
     const bool bGuiWantsPause = bDrawFrame && iFadeStatus != FADE_STATUS_FULLY_FADED &&
                                 SettingsHolder::Instance()->IsGUIEnabled();
     ReportFullFadeFrame( bMenuActive, iFadeStatus );
