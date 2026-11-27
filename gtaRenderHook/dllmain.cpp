@@ -45,7 +45,9 @@ static void ReportPatchFailureToLog( const char *operation, void *address, const
 {
     if ( !g_pDebug || !operation || !reason )
         return;
-    char report[256];
+    // Sized for the longest line the writers can send: a restore naming the site, the reason, and the state the site was
+    // left in. The note sink below is the same size.
+    char report[512];
     _snprintf_s( report, sizeof( report ), _TRUNCATE, "%s: the site at 0x%08X %s", operation,
                  static_cast<unsigned int>( reinterpret_cast<UINT_PTR>( address ) ), reason );
     g_pDebug->printError( report );
@@ -62,7 +64,22 @@ static void ReportPatchSuccessToLog( const char *operation, void *address )
                  "%s: the site at 0x%08X was written, the processor was told those bytes changed, and the page has "
                  "its own protection back",
                  operation, static_cast<unsigned int>( reinterpret_cast<UINT_PTR>( address ) ) );
-    g_pDebug->printRecord( report );
+    // Discarded on purpose, and this is the sink that may. A finished write is reported once per install and no caller
+    // spends a claim on that line, so a lost one leaves nothing a retry would recover: the site's own row and the frame
+    // check are what answer whether the write still stands. The note sink keeps its answer because the audit spends a claim.
+    (void)g_pDebug->printRecord( report );
+}
+
+// Neither a refusal nor a finished write: a limit another tool already raised, a site another module had written before we
+// reached it, or a row of the site audit. Answers whether the record reached the file: the site audit is the one caller
+// that cant ignore a no, because a false is what lets it spend its once-a-run claim again later.
+static bool ReportPatchNoteToLog( const char *operation, const char *note )
+{
+    if ( !g_pDebug || !operation || !note )
+        return false;
+    char report[512];
+    _snprintf_s( report, sizeof( report ), _TRUNCATE, "%s %s", operation, note );
+    return g_pDebug->printRecord( report );
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,
@@ -70,7 +87,6 @@ BOOL APIENTRY DllMain( HMODULE hModule,
                        LPVOID lpReserved
 )
 {
-    UNREFERENCED_PARAMETER( lpReserved );
     UNREFERENCED_PARAMETER( hModule );
     switch ( ul_reason_for_call )
     {
@@ -82,6 +98,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         // Before the first patch, so no refusal is dropped for want of a logger.
         SetPatchFailureSink( ReportPatchFailureToLog );
         SetPatchSuccessSink( ReportPatchSuccessToLog );
+        SetPatchNoteSink( ReportPatchNoteToLog );
         g_pRwCustomEngine = new CRwD3D1XEngine( g_pDebug );
 
         // Path rw/game stuff
@@ -109,17 +126,38 @@ BOOL APIENTRY DllMain( HMODULE hModule,
             }
         }
 
+        // One line naming the behaviours this build carries, so a log says which build produced it. A fixed literal that
+        // changes only when a behaviour changes, with no build time and no version stamp, because a build that embedded one
+        // would depend on when it was built rather than on what it was built from.
+        (void)g_pDebug->printRecord( "RenderHook behaviours: value and code sites owned and checked every frame, both "
+                                     "streamed rw object list limits raised from the frame path and from the streaming "
+                                     "hook, D3D device creation staged before assignment, adapter paired only with the "
+                                     "unknown driver type, frame entry points refused while no frame can be drawn, log "
+                                     "dedupe shared across threads, and a read only site watch written beside the log" );
+
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
-        // The engine holds the debug sink it was constructed with, so it has to be destroyed
-        // while that sink is still alive.
-        delete g_pRwCustomEngine;
-        g_pRwCustomEngine = nullptr;
-        delete g_pDebug;
-        g_pDebug = nullptr;
+        // lpReserved is non-null when the process is terminating, which is the documented signal that teardown is not
+        // required: the teardown below releases COM objects and shuts the MTA bridge down, and by now the loader has begun
+        // unloading other modules, so running it here tears down an interop link whose own modules may have left. The site
+        // watch is asked to stop on both paths, because a pass beginning after termination started would write into a
+        // process that is going away; only an ordinary unload waits for it and closes the handles.
+        RequestStopSiteWatchThread();
+        if ( lpReserved == nullptr )
+        {
+            // Stopped before anything the thread could read is released. It reads only the two site tables, which are
+            // function local statics living for the whole process, so nothing else depends on this order.
+            StopSiteWatchThread();
+            // The engine holds the debug sink it was constructed with, so it has to be destroyed
+            // while that sink is still alive.
+            delete g_pRwCustomEngine;
+            g_pRwCustomEngine = nullptr;
+            delete g_pDebug;
+            g_pDebug = nullptr;
+        }
         break;
     }
     return TRUE;

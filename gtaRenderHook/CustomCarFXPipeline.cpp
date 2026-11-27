@@ -36,7 +36,9 @@ void CCustomCarFXPipeline__Render( RwResEntry * repEntry, void * object, RwUInt8
 }
 void CCustomCarFXPipeline::Patch()
 {
-    SetPointer( 0x5D9FE4, CCustomCarFXPipeline__Render );
+    // The vehicle callback, so a displaced value here is traffic that drives and collides and is never drawn.
+    SetPointerExclusive( "Car FX: render callback", 0x5D9FE4,
+                         reinterpret_cast<void *>( &CCustomCarFXPipeline__Render ), SITE_PREFIX_PUSH_IMM32 );
 }
 
 void CCustomCarFXPipeline::ResetAlphaList()
@@ -134,7 +136,8 @@ void CCustomCarFXPipeline::Render( RwResEntry * repEntry, void * object, RwUInt8
         return;
     if ( !entryData->header.indexBuffer )
     {
-        g_pDebug->printMsg( "CCustomCarFXPipeline: empty index buffer found", 0 );
+        // Once per run, because this is reached for every object drawn and printMsg writes every call.
+        g_pDebug->printError( "CCustomCarFXPipeline: empty index buffer found" );
         return;
     }
 

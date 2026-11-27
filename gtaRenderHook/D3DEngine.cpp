@@ -1079,10 +1079,9 @@ static_assert( sizeof( g_aExpectedPixelShaderPrologue ) == 16,
 
 void CRwD3DEngine::PatchGame()
 {
-    // Six call sites reach this entry, so hooking it covers all of them. Excluded from both build files, so nothing
-    // calls this today. Tested in the order FindRender2dPass uses, since this address takes a branch: a readable but
-    // non executable page would take the write and fault on the first draw. Classified because the reasons differ -
-    // outside the image is another build, relocated is the right one loaded elsewhere, unknown means no answer.
+    // Six call sites reach this entry, so hooking it covers all of them. Excluded from both build files, so nothing calls
+    // this today. Tested in the order FindRender2dPass uses, since this address takes a branch. Classified because the
+    // reasons differ: outside the image is another build, relocated is the right one loaded elsewhere, unknown is no answer.
     switch ( ClassifyHostImage( reinterpret_cast<const void *>( PIXEL_SHADER_ENTRY_ADDRESS ),
                                 sizeof( g_aExpectedPixelShaderPrologue ) ) )
     {
@@ -1119,7 +1118,13 @@ void CRwD3DEngine::PatchGame()
     }
     if ( HoldsOwnBranch( PIXEL_SHADER_ENTRY_ADDRESS, REL32_JUMP_OPCODE,
                          reinterpret_cast<void *>( createPixelShader ) ) )
+    {
+        // Re-entered through the primitive rather than returning here. InstallJump records the site on this path too, and
+        // returning would register the entry only on the pass that wrote it, leaving a branch we own out of the frame check
+        // on every later pass. It writes nothing here, because the site already holds this hook's branch.
+        RedirectJump( PIXEL_SHADER_ENTRY_ADDRESS, reinterpret_cast<void *>( createPixelShader ) );
         return;
+    }
     if ( !HoldsExpectedBytes( PIXEL_SHADER_ENTRY_ADDRESS, g_aExpectedPixelShaderPrologue,
                               sizeof( g_aExpectedPixelShaderPrologue ) ) )
     {

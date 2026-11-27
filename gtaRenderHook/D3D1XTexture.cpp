@@ -62,8 +62,10 @@ CD3D1XTexture::CD3D1XTexture( RwRaster* pParent, bool mipMaps, bool hasPalette )
         SRVDesc.Format = d3dRaster->format;
         SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
         SRVDesc.Texture3D.MipLevels = UINT32_MAX;
-        if ( CALL_D3D_API( dev->CreateShaderResourceView( m_p3DTexture, &SRVDesc, &m_shaderRV ), "Failed to create 3D shader resource view" ) )
-            g_pDebug->SetD3DName( m_shaderRV, "CD3D1XTexture::3dShaderRV" );
+        // No test around this call: CALL_D3D_API returns only after it has succeeded and throws otherwise, so the
+        // condition that used to wrap the line below was a constant true and the naming ran either way.
+        CALL_D3D_API( dev->CreateShaderResourceView( m_p3DTexture, &SRVDesc, &m_shaderRV ), "Failed to create 3D shader resource view" );
+        g_pDebug->SetD3DName( m_shaderRV, "CD3D1XTexture::3dShaderRV" );
 
         return;
     }

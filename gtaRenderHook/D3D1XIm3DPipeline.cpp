@@ -42,11 +42,9 @@ CD3D1XIm3DPipeline::CD3D1XIm3DPipeline() :
         m_pDeferredPS = new CD3D1XPixelShader( shaderPath, "DeferredPS" );
 }
 
-// Plugins draw more than the initial 10000 vertices (e.g. the LOD lights of Project2DFX), so the buffers
-// grow to fit the batch instead of the upload being written past their end.
-// Returns whether the buffers now cover the request. A growth that fails leaves the old buffer in place,
-// and the upload clamps itself to it while the draw call keeps using the requested count, so the caller has
-// to drop the batch when this reports failure.
+// Plugins draw more than the initial 10000 vertices (e.g. the LOD lights of Project2DFX), so the buffers grow to fit the
+// batch instead of the upload being written past their end. Returns whether the buffers now cover the request: a growth
+// that fails leaves the old buffer in place, so the caller has to drop the batch when this reports failure.
 bool CD3D1XIm3DPipeline::EnsureCapacity( unsigned int vertexCount, unsigned int indexCount )
 {
     if ( vertexCount > m_uiVertexCapacity )
@@ -143,10 +141,9 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
         g_pStateMgr->SetPrimitiveTopology( CD3D1XEnumParser::ConvertPrimTopology( im3dPoolStash.primType ) );
         // initialize shaders
         m_pVS->Set();
-        // The game draws smashed objects (e.g. a knocked-over lamppost) in immediate mode from the G-buffer pass. There every
-        // G-buffer target has to be written and nothing blended, or the pieces get the normals and depth of what is behind.
-        // The disable covers the whole stage, not just the branch that binds the deferred shader: a shader without that
-        // entry point falls back to the base one and still writes the G-buffer pass, so it needs the same disable.
+        // The game draws smashed objects (e.g. a knocked-over lamppost) in immediate mode from the G-buffer pass, where
+        // every target has to be written and nothing blended or the pieces get the normals and depth of what is behind.
+        // The disable covers the whole stage: a shader without that entry point falls back to the base one and still writes.
         const BOOL oldBlendState = g_pStateMgr->GetAlphaBlendEnable();
         if ( m_uiDeferredStage == 1 )
         {
@@ -180,7 +177,8 @@ RwBool CD3D1XIm3DPipeline::SubmitNode()
     else
     {
         // TODO: perhaps add triangle fan rendering
-        g_pDebug->printMsg( "D3D1XIm3DPipeline: Triangle fan primitive is currently unsuported.", 0 );
+        // printError, because this is reached for every primitive drawn and printMsg writes every call.
+        g_pDebug->printError( "D3D1XIm3DPipeline: Triangle fan primitive is currently unsuported." );
     }
     return true;
 }

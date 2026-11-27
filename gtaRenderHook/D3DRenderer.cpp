@@ -48,7 +48,8 @@ CD3DRenderer::CD3DRenderer( HWND& window )
         return;
     }
 
-    IDXGIOutput *pOutput;
+    // Cleared before the call that fills it in, because the wrapper below only guarantees the pointer on success.
+    IDXGIOutput *pOutput = nullptr;
     if ( !CALL_D3D_API( m_vAdapters[m_uiCurrentAdapter]->EnumOutputs( 0, &pOutput ),
                         "Failed to enumerate adapter output #0." ) ) return;
 
@@ -74,8 +75,8 @@ CD3DRenderer::CD3DRenderer( HWND& window )
 
     // populate adapter mode list, if mode description has refresh rate less than 60 Hz
     // TODO: perhaps max refresh rate should be choosen seperatly, maybe from settings file
-    // GetDisplayModeList reports how many entries it wrote, which can be fewer than the list was
-    // sized for; the leftover entries stay zeroed and must not become display modes.
+    // GetDisplayModeList reports how many entries it wrote, which can be fewer than the list was sized for; the leftover
+    // entries stay zeroed and must not become display modes.
     for ( UINT i = 0; i < modeCount && i < modeDescriptions.size(); i++ )
     {
         // Some outputs report a zero refresh-rate denominator; keep those entries instead of
@@ -90,13 +91,10 @@ CD3DRenderer::CD3DRenderer( HWND& window )
 
 CD3DRenderer::~CD3DRenderer()
 {
-    // Safety net for a renderer destroyed without going through DeInitDevice.
-    if ( m_pMtaBridge )
-    {
-        m_pMtaBridge->Shutdown();
-        delete m_pMtaBridge;
-        m_pMtaBridge = nullptr;
-    }
+    // Safety net for a renderer destroyed without going through DeInitDevice: Close can run before Stop, so without this
+    // the device, the context and both swap chain references outlive the object that owned them. DeInitDevice clears every
+    // member it releases, so in the usual Stop then Close order there is nothing left for it to do here.
+    DeInitDevice();
 
     for ( auto pAdapter : m_vAdapters )
         pAdapter->Release();
@@ -133,10 +131,14 @@ bool CD3DRenderer::InitDevice()
     g_pDebug->printMsg( "Device initialization: start", 1 );
     // resize and reposition rendering window if required
     // TODO: add ability to choose wether to center it if we are in windowed mode
-    RECT rc;
-    GetClientRect( m_hWnd, &rc );
-    m_uiWidth = rc.right - rc.left;
-    m_uiHeight = rc.bottom - rc.top;
+    // GetClientRect reports whether it wrote the rectangle, and the members keep their cleared value when it didnt, which the
+    // comparison below reads as a mismatch. The render engine reads both back through getWidth and getHeight.
+    RECT rc{};
+    if ( GetClientRect( m_hWnd, &rc ) != 0 )
+    {
+        m_uiWidth = static_cast<UINT>( rc.right - rc.left );
+        m_uiHeight = static_cast<UINT>( rc.bottom - rc.top );
+    }
     if ( isWindowed || m_uiWidth != currentAdapterMode.Width || m_uiHeight != currentAdapterMode.Height )
     {
         m_uiWidth = currentAdapterMode.Width;
@@ -183,12 +185,25 @@ bool CD3DRenderer::InitDevice()
     UINT numFeatureLevels = ARRAYSIZE( featureLevels );
 
 
+    // Staged into locals for both retry loops and handed to the members only once a device exists. The create call states
+    // what its outputs hold on success and nothing about failure, while DeInitDevice releases whatever the members hold, so a
+    // failed iteration that left a non device in a member would be released as one. Each iteration clears the locals first.
+    ID3D11Device *pCreatedDevice = nullptr;
+    ID3D11DeviceContext *pCreatedContext = nullptr;
+    D3D_FEATURE_LEVEL createdFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+
     // loop over each driver type to find supported one
     for ( UINT driverTypeIndex = 0; driverTypeIndex < numDriverTypes; driverTypeIndex++ )
     {
         m_driverType = driverTypes[driverTypeIndex];
-        hr = D3D11CreateDevice( m_driverType == D3D_DRIVER_TYPE_HARDWARE ? nullptr : currentAdapter, m_driverType, nullptr, createDeviceFlags, featureLevels, numFeatureLevels,
-                                D3D11_SDK_VERSION, &m_pd3dDevice, &m_featureLevel, &m_pImmediateContext );
+        // The adapter is paired with UNKNOWN alone: the only driver type the create call accepts alongside a non null
+        // adapter, and any other type with one is refused, which covers the two software types below. HARDWARE still passes
+        // no adapter, which isnt the same as passing currentAdapter: the call picks the default one.
+        IDXGIAdapter *pSelectedAdapter = m_driverType == D3D_DRIVER_TYPE_UNKNOWN ? currentAdapter : nullptr;
+        pCreatedDevice = nullptr;
+        pCreatedContext = nullptr;
+        hr = D3D11CreateDevice( pSelectedAdapter, m_driverType, nullptr, createDeviceFlags, featureLevels, numFeatureLevels,
+                                D3D11_SDK_VERSION, &pCreatedDevice, &createdFeatureLevel, &pCreatedContext );
         // if we failed to create device with invalid arg error,
         // probably it's because current feature level is not supported by GPU,
         // so we will try to find supported feature level set
@@ -196,10 +211,14 @@ bool CD3DRenderer::InitDevice()
         {
 
             // try to find supported feature level by iterating over whole set and removing one feature level after another until success
+            // Each attempt asks for every level from i to the end, so the bound stops one short: the final attempt starts at
+            // the second to last level and already covers the last one.
             for ( UINT i = 1; i < numFeatureLevels - 1; i++ )
             {
-                hr = D3D11CreateDevice( m_driverType == D3D_DRIVER_TYPE_HARDWARE ? nullptr : currentAdapter, m_driverType, nullptr, createDeviceFlags, &featureLevels[i], numFeatureLevels - i,
-                                        D3D11_SDK_VERSION, &m_pd3dDevice, &m_featureLevel, &m_pImmediateContext );
+                pCreatedDevice = nullptr;
+                pCreatedContext = nullptr;
+                hr = D3D11CreateDevice( pSelectedAdapter, m_driverType, nullptr, createDeviceFlags, &featureLevels[i], numFeatureLevels - i,
+                                        D3D11_SDK_VERSION, &pCreatedDevice, &createdFeatureLevel, &pCreatedContext );
                 if ( SUCCEEDED( hr ) )
                     break;
             }
@@ -215,14 +234,21 @@ bool CD3DRenderer::InitDevice()
         return false;
     }
 
+    // The members are assigned here and nowhere earlier, so every failure path above leaves them as they were.
+    m_pd3dDevice = pCreatedDevice;
+    m_pImmediateContext = pCreatedContext;
+    m_featureLevel = createdFeatureLevel;
+
     g_pDebug->printMsg( "D3D11 Device created", 1 );
     // Query debug interface
     m_pd3dDevice->QueryInterface( __uuidof( ID3D11Debug ), (void**)&m_pDebug );
 
     // Create swap chain for device.
-    IDXGIFactory2* dxgiFactory2 = nullptr;
+    // Held by a smart pointer rather than released by hand below, because both calls in that block throw instead of
+    // returning a failure value: a throw skips every statement after it, so a release written last never runs.
+    CComPtr<IDXGIFactory2> dxgiFactory2;
     m_pdxgiFactory->QueryInterface( __uuidof( IDXGIFactory2 ), reinterpret_cast<void**>( &dxgiFactory2 ) );
-    if ( dxgiFactory2 )
+    if ( dxgiFactory2 != nullptr )
     {
         // DirectX 11.1 or later
         m_pImmediateContext->QueryInterface( __uuidof( ID3DUserDefinedAnnotation ), reinterpret_cast<void**>( &m_pRenderingAnnotation ) );
@@ -246,12 +272,14 @@ bool CD3DRenderer::InitDevice()
         fsd.Windowed = isWindowed;
         fsd.RefreshRate = currentAdapterMode.RefreshRate;
 
-        if ( CALL_D3D_API( dxgiFactory2->CreateSwapChainForHwnd( m_pd3dDevice, m_hWnd, &sd, &fsd, nullptr, &m_pSwapChain1 ),
-                           "Failed to create swap chain using DX11.1 API." ) )
-            m_pSwapChain1->QueryInterface( __uuidof( IDXGISwapChain1 ), reinterpret_cast<void**>( &m_pSwapChain ) );
-
-
-        dxgiFactory2->Release();
+        CALL_D3D_API( dxgiFactory2->CreateSwapChainForHwnd( m_pd3dDevice, m_hWnd, &sd, &fsd, nullptr, &m_pSwapChain1 ),
+                      "Failed to create swap chain using DX11.1 API." );
+        // Second reference to the chain above, typed as the base interface the rest of the engine keeps. DeInitDevice releases
+        // both and nulls each, which is what keeps them balanced. A test wedged around these calls would be a constant true,
+        // because CALL_D3D_API returns only after it has succeeded.
+        CALL_D3D_API( m_pSwapChain1->QueryInterface( __uuidof( IDXGISwapChain1 ),
+                                                    reinterpret_cast<void**>( &m_pSwapChain ) ),
+                      "Failed to query the created swap chain for IDXGISwapChain1." );
     }
     else
     {
@@ -402,10 +430,9 @@ void CD3DRenderer::EndUpdate( RwCamera *camera )
     {
         ID3D11UnorderedAccessView* uavs = nullptr;
         m_pImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews( 0, { nullptr }, nullptr, 2, 1, &uavs, nullptr );
-        // That call leaves the device with no colour target and no depth view bound, so the state manager is told
-        // the same thing. Only the octree clip maps carry the flag that reaches this branch, and leaving the cache
-        // on the camera's target would let a later SetRenderTargets for those same pointers compare equal, raise
-        // no update, and draw into whatever the device really holds.
+        // That call leaves the device with no colour target and no depth view bound, so the state manager is told the same
+        // thing. Leaving its cache on the camera's target would let a later SetRenderTargets for those same pointers compare
+        // equal, raise no update, and draw into whatever the device really holds.
         g_pStateMgr->SetRenderTargets( 0, nullptr, nullptr );
     }
 }
@@ -445,12 +472,24 @@ void CD3DRenderer::Clear( RwCamera *camera, RwRGBA& color, RwInt32 flags )
 
 void CD3DRenderer::Present( bool VSync )
 {
+    // Ahead of the bridge check, so a frame the bridge composites is still a frame whose fixed sites were checked.
+    // Installing a value proves only what the site held at install time: another module patches in levels and can rewrite
+    // a site afterwards. The idle entry runs the same check before it touches the world, and this is here too because a
+    // frame can reach this present without passing one; both call one function, which also runs the one site audit a run.
+    RevalidateOwnedSites();
+
     // Once MTA's device exists it owns the frame: copy, present, then its interface draw.
     if ( m_pMtaBridge != nullptr && m_pMtaBridge->IsActive() )
     {
         if ( m_pMtaBridge->Composite( VSync ) )
             return;
     }
+
+    // The chain is null between DeInitDevice releasing it and the next device being opened, and it is also null when Start
+    // stopped after InitDevice returned false, which is before any chain was created. Both are lifetimes this plugin drives
+    // rather than a fault, so the flip is skipped the way a successful composite skips it above.
+    if ( m_pSwapChain == nullptr )
+        return;
 
     m_pSwapChain->Present( VSync ? 1 : 0, 0 );
 }
@@ -465,8 +504,10 @@ unsigned int CD3DRenderer::getAvaliableTextureMemory()
     if ( m_uiCurrentAdapter >= m_vAdapters.size() )
         return 0;
     DXGI_ADAPTER_DESC desc;
-    if ( !CALL_D3D_API( m_vAdapters[m_uiCurrentAdapter]->GetDesc( &desc ), "Failed to retrieve adapter description." ) )
-        return 0;
+    // Untested on purpose. CALL_D3D_API returns only after the call has succeeded and throws otherwise, so a test around
+    // this line would be a constant false. The return 0 above answers a different question and stays: an adapter index this
+    // renderer holds no adapter for is a state that does happen.
+    CALL_D3D_API( m_vAdapters[m_uiCurrentAdapter]->GetDesc( &desc ), "Failed to retrieve adapter description." );
     return desc.DedicatedVideoMemory;
 }
 
@@ -477,15 +518,15 @@ const char* CD3DRenderer::getAdapterInfo( UINT n )
     char* info = m_sAdapterInfo;
     DXGI_ADAPTER_DESC desc;
 
-    // wcstombs reports failure when the current locale cannot represent a character, and stores
-    // nothing at all for an empty description, so either case has to report no information instead
-    // of leaving whatever the buffer held from an earlier call. The buffer is a member, so it also
-    // has to be cleared here: wcstombs writes only what it converts and never a terminator, so a
-    // description shorter than the previous adapter's would otherwise keep that adapter's tail.
+    // wcstombs reports failure when the locale cannot represent a character and stores nothing for an empty description, so
+    // either case has to report no information. The buffer is a member, so it is cleared here as well: wcstombs writes only
+    // what it converts and never a terminator, so a shorter description would keep the previous adapter's tail.
     memset( info, 0, sizeof( m_sAdapterInfo ) );
     size_t converted = static_cast<size_t>( -1 );
-    if ( CALL_D3D_API( m_vAdapters[n]->GetDesc( &desc ), "Failed to retrieve adapter description." ) )
-        converted = wcstombs( info, desc.Description, sizeof( m_sAdapterInfo ) - 1 );
+    // Untested for the reason the texture memory accessor gives: this helper throws rather than returning a failure value, so
+    // a test here would be a constant true. The fallback below covers the wcstombs outcomes, which is all it ever covered.
+    CALL_D3D_API( m_vAdapters[n]->GetDesc( &desc ), "Failed to retrieve adapter description." );
+    converted = wcstombs( info, desc.Description, sizeof( m_sAdapterInfo ) - 1 );
     if ( converted == static_cast<size_t>( -1 ) || converted == 0 )
     {
         memset( info, 0, sizeof( m_sAdapterInfo ) );

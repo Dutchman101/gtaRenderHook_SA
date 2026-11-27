@@ -27,6 +27,7 @@
 #include "D3D1XVertexBufferManager.h"
 #include "D3D1XIndexBuffer.h"
 #include "D3D1XShaderDefines.h" 
+#include "SettingsHolder.h"
 
 #ifdef USE_ANTTWEAKBAR
 #include <AntTweakBar.h>
@@ -49,14 +50,46 @@ CRwD3D1XEngine::CRwD3D1XEngine( CDebug *d ) : CIRwRenderEngine{ d }
 
 bool CRwD3D1XEngine::Open( HWND window )
 {
+    // A renderer that was just created has no device and no pipelines, so no frame work is possible until Start has built
+    // them. Cleared here as well as in Stop, because either entry point can be the one that runs after a previous lifetime.
+    g_bRenderEngineFrameReady.store( false, std::memory_order_release );
     m_pRenderer = new CD3DRenderer( window );
     return true;
 }
 
 bool CRwD3D1XEngine::Close()
 {
-    // Open assigns this pointer and Close is its matching teardown, so it is cleared here: a second
-    // Close, or a Stop that arrives after it, would otherwise reach an object that no longer exists.
+    // Dropped before the teardown, so a frame arriving during it is refused by the entry wrappers.
+    g_bRenderEngineFrameReady.store( false, std::memory_order_release );
+    // The pipelines and the three tables are released before the renderer is deleted, because its destructor releases the
+    // device and a released device makes every object created from it invalid. Pipelines first, then the tables, because
+    // they create and register entries in the vertex buffer and declaration tables. Either order of Close and Stop is safe,
+    // since neither is called from this project: whichever runs first, the other finds every pointer null and table empty.
+    delete m_pSkinPipe;
+    m_pSkinPipe = nullptr;
+    delete m_pDefaultPipe;
+    m_pDefaultPipe = nullptr;
+    delete m_pIm2DPipe;
+    m_pIm2DPipe = nullptr;
+    delete m_pIm3DPipe;
+    m_pIm3DPipe = nullptr;
+    CD3D1XVertexBufferManager::Shutdown();
+    CD3D1XVertexDeclarationManager::Shutdown();
+    CD3D1XTextureMemoryManager::Shutdown();
+    // The state manager, the render buffers manager and the define list are deliberately not released here. The first two
+    // do hold device objects, but the idle hook reads both without a null test every frame, so releasing them here would
+    // trade a teardown in the wrong order for a null test the frame path doesnt perform. The cost is that a Close with no
+    // Stop after it keeps all three alive. AntTweakBar is ended here, before the renderer, because it holds the device
+    // being released; the settings holder's record makes it end once whichever of Close and Stop runs first.
+#ifdef USE_ANTTWEAKBAR
+    // While the bar is visible it holds the mouse capture and can have a drag outstanding, and both belong to a bar about to
+    // be destroyed. They can only be released while the library is live, which is why this comes first. TerminateGUI ends the
+    // library under the record it clears, so neither call needs this function to know whether an init ran.
+    SettingsHolder::Instance()->DisableGUI();
+    SettingsHolder::Instance()->TerminateGUI();
+#endif
+    // Open assigns this pointer and Close is its matching teardown, so it is cleared here: a second Close, or a Stop after it,
+    // would otherwise reach an object that no longer exists.
     delete m_pRenderer;
     m_pRenderer = nullptr;
     return true;
@@ -65,11 +98,9 @@ bool CRwD3D1XEngine::Close()
 // Initializes device, all managers and rendering pipelines.
 bool CRwD3D1XEngine::Start()
 {
-    // Every pipeline and manager below creates Direct3D 11 objects, so a device that failed to come
-    // up has to stop the startup here instead of letting each constructor run against a null device.
-    // The report goes through printError rather than printMsg because DebugMessaging defaults to off,
-    // and a startup that stops has to leave a record even then.
-    // The renderer is opened by the game and closed before the next open, so it can be absent here.
+    // Every pipeline and manager below creates Direct3D 11 objects, so a device that failed to come up has to stop the
+    // startup here. printError is written whatever DebugMessaging and DebugLevel are set to, so a startup that stops reports
+    // through it. The renderer is opened by the game and closed before the next open, so it can be absent here.
     if ( m_pRenderer == nullptr )
     {
         g_pDebug->printError( "RenderHook startup aborted: no renderer is open, so the device was not initialized." );
@@ -77,10 +108,8 @@ bool CRwD3D1XEngine::Start()
     }
     if ( !m_pRenderer->InitDevice() )
     {
-        // InitDevice names the reason it returned false, and one of those reasons is an adapter or
-        // display mode list that enumerated nothing, where no device creation was attempted at all.
-        // This line therefore reports only what it can establish here: startup stopped before the
-        // rendering pipelines were created.
+        // InitDevice names the reason it returned false, and one of those is an adapter or display mode list that
+        // enumerated nothing, where no device creation was attempted. This line reports only what it can establish here.
         g_pDebug->printError( "RenderHook startup aborted: the device was not initialized, so the render pipelines were not created." );
         return false;
     }
@@ -96,22 +125,39 @@ bool CRwD3D1XEngine::Start()
     m_pDefaultPipe = new CD3D1XDefaultPipeline();
     m_pSkinPipe = new CD3D1XSkinPipeline();
 #ifdef USE_ANTTWEAKBAR
+    // printError, not printMsg: this leaves the settings bar unavailable for the whole run and nothing later reports
+    // it, because a teardown that finds the library record clear ends nothing and so has nothing to say. The line is
+    // written once however many times Start runs.
     if ( !TwInit( TwGraphAPI::TW_DIRECT3D11, m_pRenderer->getDevice() ) )
-        g_pDebug->printMsg( "Failed to initialize AntTweakBar, in-game settings will be disabled.", 0 );
+        g_pDebug->printError( "Failed to initialize AntTweakBar, in-game settings will be disabled." );
     else
     {
         TwWindowSize( m_pRenderer->getCurrentAdapterModeDesc().Width, m_pRenderer->getCurrentAdapterModeDesc().Height );
+        // Recorded only for the branch that succeeded, which is what lets a teardown end AntTweakBar without having
+        // to know whether an init ran on this process at all, and what the settings holder tests before it lets any of
+        // its own entry points call into the library.
+        SettingsHolder::Instance()->SetGUILibraryAvailable( true );
     }
 #endif
     g_pStateMgr->SetScreenSize( static_cast<float>( m_pRenderer->getCurrentAdapterModeDesc().Width ), static_cast<float>( m_pRenderer->getCurrentAdapterModeDesc().Height ) );
+    // Published last, after every manager and pipeline this flag stands for exists. A frame that reads it as set
+    // therefore finds everything Start builds, which is the whole reason it is one flag rather than a test per pointer.
+    g_bRenderEngineFrameReady.store( true, std::memory_order_release );
     return true;
 }
 
 // Deallocates pipelines and managers.
 bool CRwD3D1XEngine::Stop()
 {
+    // Withdrawn before the first release below, so no frame can begin between the teardown starting and this flag
+    // changing. Everything this flag attests to is released in this function, so it has to be false for all of it.
+    g_bRenderEngineFrameReady.store( false, std::memory_order_release );
 #ifdef USE_ANTTWEAKBAR
-    TwTerminate();
+    // The order Close uses, for the same reason: what the bar holds is released while the library is live, and the
+    // record that refuses the settings holder's entry points is cleared before the library goes rather than after.
+    // TerminateGUI owns both of those steps, so the pair exists once rather than at each teardown.
+    SettingsHolder::Instance()->DisableGUI();
+    SettingsHolder::Instance()->TerminateGUI();
 #endif
     // Each pointer is cleared immediately after it is released. Start() can now return early without
     // reassigning them, so a released object left reachable here would be freed a second time by the
@@ -497,20 +543,17 @@ bool CRwD3D1XEngine::Im2DRenderIndexedPrimitive( RwPrimitiveType primType, RwIm2
 // RASTER FUNCTIONS
 
 // The size of the buffer a lock hands out for one level: that level's stride times its row count, with a floor of 64
-// bytes so textures smaller than 8x8 still get a buffer. The allocation in RasterLock and the stream reads in
-// NativeTextureRead both use this, so the size a read is checked against is the size that was allocated, and the
-// multiply stays in size_t so a large level cannot wrap the count before the allocation sees it.
+// bytes so textures smaller than 8x8 still get a buffer. RasterLock's allocation and NativeTextureRead's stream reads
+// both use this, so the size a read is checked against is the size that was allocated.
 static size_t RasterLockBufferSize( const RwRaster *raster )
 {
     return max( static_cast<size_t>( raster->stride ) * static_cast<size_t>( raster->height ), 64 );
 }
 
 // Whether the texture behind a raster really has the level a lock named. A lock level is used as the destination
-// subresource index, and for these textures that index is the mip level itself, so the level has to name one the
-// texture holds. The textures created here carry a shortened mip chain, so the level a file supplies can name one the
-// texture does not have, and an index that names no level of the texture is not an index that identifies a subresource
-// of it. The ways the level can be unusable stay apart because the caller treats them differently: the two that only
-// happen when something is wrong are reported, and a level past the last is the shortened chain doing its job.
+// subresource index, and for these textures that index is the mip level itself. The textures created here carry a
+// shortened mip chain, so a level a file supplies can name one the texture doesnt have. The ways it can be unusable stay
+// apart because the caller treats them differently: a level past the last is the shortened chain doing its job.
 enum class eRasterLevelVerdict
 {
     Present,
@@ -532,10 +575,9 @@ static eRasterLevelVerdict RasterLevelVerdict( ID3D11Resource *resource, UINT le
         return eRasterLevelVerdict::NotTwoDimensional;
     D3D11_TEXTURE2D_DESC desc{};
     static_cast<ID3D11Texture2D*>( resource )->GetDesc( &desc );
-    // A level count of zero asks for the full chain rather than for an empty one, so the count comes from the extent
-    // instead: a width by height base holds one level per halving down to one, which is one plus the number of halvings
-    // the larger extent allows. Reading the zero as an empty chain would drop every upload for the small textures, and
-    // reading it as unbounded would hand an index past the last level to the update this test guards.
+    // A level count of zero asks for the full chain rather than an empty one, so the count comes from the extent instead:
+    // a width by height base holds one level per halving down to one. Reading the zero as an empty chain would drop every
+    // upload for the small textures; reading it as unbounded would hand an index past the last level to the update below.
     UINT levelCount = desc.MipLevels;
     if ( levelCount == 0 )
     {
@@ -837,10 +879,8 @@ bool CRwD3D1XEngine::RasterLock( RwRaster *raster, UINT flags, void** data )
         return false;
 
     // A raster can reach here with no resource at all: RasterCreate reports success for the 3D texture type it leaves
-    // empty, and for the raster types its switch does not handle. A read lock would hand back the GPU copy of that
-    // absent resource; a write lock would hand back a buffer that the matching unlock has nowhere to upload, so every
-    // byte the caller wrote would be freed unseen. Refusing both here, before the resize and the allocation below,
-    // keeps the refusal free of side effects and hands the caller its own failure path instead.
+    // empty, and for the raster types its switch does not handle. A read lock would hand back the GPU copy of nothing, a
+    // write lock a buffer the matching unlock has nowhere to upload. Both are refused below, before the resize.
     if ( d3dRaster->resourse == nullptr )
         return false;
 
@@ -879,9 +919,8 @@ bool CRwD3D1XEngine::RasterLock( RwRaster *raster, UINT flags, void** data )
     {
         *data = d3dRaster->resourse->LockToRead();
         // The read lock reports a staging failure by returning no buffer after it has already set its read flag. A lock
-        // that hands back nothing has to be refused and undone here, or the raster is left holding a buffer it was told
-        // not to use and the next unlock takes the read path instead of uploading what the caller wrote. The refusal
-        // above is what keeps this call safe: it returns before this point whenever there is no resource to lock.
+        // handing back nothing has to be refused and undone here, or the raster is left holding a buffer it was told not to
+        // use and the next unlock takes the read path instead of uploading what the caller wrote.
         if ( *data == nullptr )
         {
             d3dRaster->resourse->ResetLockedToRead();
@@ -1038,7 +1077,11 @@ bool CRwD3D1XEngine::CameraBeginUpdate( RwCamera *camera )
             RsGlobal.maximumWidth  = currModeDesc.Width;
             RsGlobal.maximumHeight = currModeDesc.Height;
 #ifdef USE_ANTTWEAKBAR
-            TwWindowSize( currModeDesc.Width, currModeDesc.Height );
+            // The frame gate this is reached through is about the managers and pipelines a Start builds, and a Start
+            // publishes it whether or not TwInit succeeded, so it doesnt answer whether the library is up. A window size
+            // only means something to a library that was initialised, so it goes under the settings holder's own record.
+            if ( SettingsHolder::Instance()->IsGUILibraryAvailable() )
+                TwWindowSize( currModeDesc.Width, currModeDesc.Height );
 #endif
             RwRasterDestroy( camera->frameBuffer );
             swapChain->ResizeTarget( &currModeDesc );
@@ -1762,9 +1805,8 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
     }
     // The runtime only passes this bind on to the driver when the start slot sits at or past the colour targets being
     // bound and when that slot plus the view count stays inside the u# register file. Breaching either rule drops the
-    // colour and depth targets along with the views, so a request that breaches one binds no views at all. The start
-    // slot is itself a register index, so the only values that name a register are the ones below the register file
-    // count: clamping towards that count would name a register past the end instead of refusing the request.
+    // colour and depth targets along with the views. The start slot is itself a register index, so clamping towards the
+    // register file count would name a register past the end instead of refusing the request.
     const bool uavSlotsInRegisterFile = uavStart >= boundCount && uavStart < D3D11_PS_CS_UAV_REGISTER_COUNT;
     if ( boundCount > 0 && rasters[0] != nullptr )
     {
@@ -1782,10 +1824,9 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
     const bool uavRequestNamesViews = uavs != nullptr && uavCount > 0 && uavs[0] != nullptr;
     if ( uavSlotsInRegisterFile && uavRequestNamesViews )
     {
-        // One entry per requested view with its index preserved, so a raster without an unordered access view keeps
-        // its slot instead of letting the views after it slide down into lower u# registers. The array is the size of
-        // the register file, which is also what bounds the request: uavStart is a register index, so only the registers
-        // above it can be filled.
+        // One entry per requested view with its index preserved, so a raster without an unordered access view keeps its
+        // slot instead of letting the views after it slide into lower u# registers. The array is the size of the register
+        // file, which also bounds the request: uavStart is a register index, so only registers above it can be filled.
         ID3D11UnorderedAccessView* pUAVs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
         UINT uavBoundCount = 0;
         for ( RwUInt32 i = 0; i < uavCount && uavStart + uavBoundCount < D3D11_PS_CS_UAV_REGISTER_COUNT; i++ )
@@ -1811,10 +1852,9 @@ void CRwD3D1XEngine::SetRenderTargetsAndUAVs( RwRaster ** rasters, RwRaster ** u
     }
     else
     {
-        // The start slot names no u# register, so this request binds no view, and the plain bind is the one call left
-        // that can still deliver its colour and depth targets. What that call documents about those targets is that any
-        // target it does not name is set to null; it documents nothing about the u# registers, so this path does not
-        // claim to have released anything there.
+        // The start slot names no u# register, so this request binds no view, and the plain bind is the one call left that
+        // can still deliver its colour and depth targets. Any target that call doesnt name is set to null; it documents
+        // nothing about the u# registers, so this path doesnt claim to have released anything there.
         m_pRenderer->getContext()->OMSetRenderTargets( boundCount, pRTVs, depthStencilRes );
     }
     // FlushRenderTargets re-issues the colour and depth targets whenever the cache describes a different bind,

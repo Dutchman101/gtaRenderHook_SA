@@ -33,14 +33,20 @@ CRwPointerTable CRwGameHooks::ms_rwPointerTableSA = {
 };
 void CRwGameHooks::Patch( const CRwPointerTable& pointerTable )
 {
-    SetPointer( pointerTable.m_fpRenderSystem, RenderSystem );
+    // A site already holding this plugin's value is left alone; a site holding another module's value is named and then
+    // taken, because every entry below is a way the renderer reaches its own code.
+    SetPointerExclusive( "RW: render system", pointerTable.m_fpRenderSystem, reinterpret_cast<void *>( &RenderSystem ) );
 
-    SetPointer( pointerTable.m_fpIm2DRenderPrim, Im2DRenderPrim );
-    SetPointer( pointerTable.m_fpIm2DRenderIndexedPrim, Im2DRenderIndexedPrim );
-    SetPointer( pointerTable.m_fpIm2DRenderLine, Im2DRenderLine );
+    SetPointerExclusive( "RW: immediate 2D render primitive", pointerTable.m_fpIm2DRenderPrim,
+                         reinterpret_cast<void *>( &Im2DRenderPrim ) );
+    SetPointerExclusive( "RW: immediate 2D indexed primitive", pointerTable.m_fpIm2DRenderIndexedPrim,
+                         reinterpret_cast<void *>( &Im2DRenderIndexedPrim ) );
+    SetPointerExclusive( "RW: immediate 2D line", pointerTable.m_fpIm2DRenderLine,
+                         reinterpret_cast<void *>( &Im2DRenderLine ) );
 
     RedirectJump( pointerTable.m_fpIm3DOpen, Im3DOpen );
-    SetPointer( pointerTable.m_fpIm3DSubmit, Im3DSubmit );
+    SetPointerExclusive( "RW: immediate 3D submit", pointerTable.m_fpIm3DSubmit,
+                         reinterpret_cast<void *>( &Im3DSubmit ) );
 
     RedirectJump( pointerTable.m_fpSetRefreshRate, SetRefreshRate );
     RedirectJump( pointerTable.m_fpSetVideoMode, SetVideoMode );
@@ -49,13 +55,22 @@ void CRwGameHooks::Patch( const CRwPointerTable& pointerTable )
     RedirectJump( pointerTable.m_fpCheckEnviromentMapSupport, CheckEnviromentMapSupport );
     RedirectJump( pointerTable.m_fpCheckNativeTextureSupport, CheckNativeTextureSupport );
 
-    SetPointer( pointerTable.m_fpSetRenderState, SetRenderState );
-    SetPointer( pointerTable.m_fpGetRenderState, GetRenderState );
+    SetPointerExclusive( "RW: set render state", pointerTable.m_fpSetRenderState,
+                         reinterpret_cast<void *>( &SetRenderState ) );
+    SetPointerExclusive( "RW: get render state", pointerTable.m_fpGetRenderState,
+                         reinterpret_cast<void *>( &GetRenderState ) );
 
-    SetPointer( pointerTable.m_fpAtomicAllInOneNode, AtomicAllInOneNode );
-    SetPointer( pointerTable.m_fpSkinAllInOneNode, SkinAllInOneNode );
+    // The two atomic callbacks the whole frame's geometry passes through, so a value that does not reach this
+    // renderer here is a world that does not draw while everything around it still runs.
+    SetPointerExclusive( "RW: atomic all in one node", pointerTable.m_fpAtomicAllInOneNode,
+                         reinterpret_cast<void *>( &AtomicAllInOneNode ) );
+    SetPointerExclusive( "RW: skin all in one node", pointerTable.m_fpSkinAllInOneNode,
+                         reinterpret_cast<void *>( &SkinAllInOneNode ) );
 
-    SetPointer( pointerTable.m_fpDefaultInstanceCallback, DefaultInstanceCallback );
+    // This one entry is not a value on its own in the executable's data: it is the four byte operand of a
+    // mov dword ptr [eax], imm32 at 0x00757899, so it carries the two bytes in front of it.
+    SetPointerExclusive( "RW: default instance callback", pointerTable.m_fpDefaultInstanceCallback,
+                         reinterpret_cast<void *>( &DefaultInstanceCallback ), SITE_PREFIX_MOV_EAX_IMM32 );
 
     //RedirectJump(pointerTable.m_fpInitRW, InitRW);
     //RedirectJump(pointerTable.m_fpShutdownRW, ShutdownRW);
@@ -73,9 +88,8 @@ RwBool CRwGameHooks::SetRenderState( RwRenderState state, UINT param )
 
 RwBool CRwGameHooks::GetRenderState( RwRenderState nState, UINT* pParam )
 {
-    // RenderStateGet stores a result for every state it is handed, so the only case it cannot answer is a
-    // caller that passed no destination: that is refused here instead of being written through. Its own
-    // result is returned as it stands.
+    // RenderStateGet stores a result for every state it is handed, so the only case it cant answer is a caller that
+    // passed no destination. That is refused here instead of being written through.
     if ( pParam == nullptr )
         return false;
     return g_pRwCustomEngine->RenderStateGet( nState, *pParam );
@@ -115,26 +129,21 @@ RwBool CRwGameHooks::Im2DRenderIndexedPrim( RwPrimitiveType primType, RwIm2DVert
 
 RwBool CRwGameHooks::Im2DRenderLine( RwIm2DVertex *vertices, RwInt32 numVertices, RwInt32 vert1, RwInt32 vert2 )
 {
-    // A line is a two-index line list, so it routes through the indexed path the engine already implements
-    // rather than through a separate line pipeline. Both endpoints are caller-supplied ordinals, so they are
-    // range-checked here: the indexed path trusts its indices and would read past the vertex array otherwise.
+    // A line is a two-index line list, so it routes through the indexed path rather than a separate line pipeline. Both
+    // endpoints are caller-supplied ordinals, so they are range-checked here: the indexed path trusts its indices.
     if ( vertices == nullptr || numVertices <= 0 )
         return false;
-    // RwImVertexIndex is RwUInt16 and the indexed path uploads it straight into an R16_UINT buffer, so an
-    // ordinal above that range narrows to a different vertex and draws the line somewhere else instead of
-    // failing. numVertices reaches the tens of millions, so it cannot stand in as the bound for that cast.
-    // The parentheses around max keep the windows.h macro of the same name from expanding it, the same form
-    // the Im2D and Im3D upload bounds use.
+    // RwImVertexIndex is RwUInt16 and the indexed path uploads it into an R16_UINT buffer, so a higher ordinal narrows to a
+    // different vertex, and numVertices reaches the tens of millions so it cant bound that cast. The parentheses keep the
+    // windows.h max macro from expanding it.
     const RwInt32 maxIndexValue = static_cast<RwInt32>( (std::numeric_limits<RwImVertexIndex>::max )() );
     if ( vert1 < 0 || vert1 >= numVertices || vert1 > maxIndexValue ||
          vert2 < 0 || vert2 >= numVertices || vert2 > maxIndexValue )
         return false;
 
     RwImVertexIndex indices[2] = { (RwImVertexIndex)vert1, (RwImVertexIndex)vert2 };
-    // The indexed path uploads numVertices vertices and grows the shared Im2D vertex buffer to that count, so
-    // handing it the caller's whole batch uploads every vertex and keeps the buffer that large for a draw that
-    // reads two entries. Only the vertices the two indices can reach are needed, and the index bound above
-    // already keeps that within 65536.
+    // The indexed path uploads numVertices vertices and grows the shared Im2D buffer to that count, so handing it the whole
+    // batch keeps it that large for a draw reading two entries. Only what the two indices reach is needed.
     const RwInt32 usedVertices = ( vert1 > vert2 ? vert1 : vert2 ) + 1;
     return g_pRwCustomEngine->Im2DRenderIndexedPrimitive( rwPRIMTYPELINELIST, vertices, usedVertices, indices, 2 );
 }
@@ -145,16 +154,10 @@ void CRwGameHooks::Im3DOpen()
 
 void __fastcall CRwGameHooks::InitGamma( void *pGamma, void * )
 {
-    // The game's CGamma constructor writes the object's four fields, and the game's own gamma function reads the
-    // first of them as an on switch: it applies nothing while that field is clear. A hook that returns without
-    // writing them leaves the object at zero, so that switch stays clear and no display gamma is ever applied.
-    // The four writes below are the constructor's own, decoded from the retail executable at 0x00747180. The two
-    // level fields start at the values the game's curve code compares against to decide that no target has been
-    // set yet.
-    //
-    // The display cap query that follows those writes is deliberately not reproduced: it takes a Direct3D
-    // interface through the path this renderer replaced, and it only clears the first field again on a device
-    // that reports no gamma support.
+    // The game's CGamma constructor writes the object's four fields, and its gamma function reads the first as an on switch
+    // and applies nothing while that is clear, so a hook that returns without writing them leaves no display gamma ever
+    // applied. The four writes below are the constructor's own, decoded at 0x00747180. The display cap query after them is
+    // deliberately not reproduced: it reaches Direct3D through the path this renderer replaced.
     struct CGammaFields
     {
         int   m_nEnabled;        // +0x00
@@ -162,9 +165,8 @@ void __fastcall CRwGameHooks::InitGamma( void *pGamma, void * )
         float m_fTargetLevel;    // +0x08
         float m_fPrevLevel;      // +0x0C
     };
-    // The offsets are the game's, not this file's, so the compiler is made to keep them here rather than
-    // trusted to. A field inserted above, or two fields swapped, changes what the writes below mean while
-    // still building, and this is what stops that.
+    // The offsets are the game's, not this file's, so the compiler is made to keep them: a field inserted above, or two
+    // swapped, changes what the writes below mean while still building.
     static_assert( sizeof( CGammaFields ) == 0x10, "CGamma block size changed" );
     static_assert( offsetof( CGammaFields, m_nEnabled ) == 0x00, "CGamma on switch moved" );
     static_assert( offsetof( CGammaFields, m_fCurrentLevel ) == 0x04, "CGamma current level moved" );

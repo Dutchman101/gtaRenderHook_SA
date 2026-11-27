@@ -1,6 +1,7 @@
 // This is an open source non-commercial project. Dear PVS-Studio, please check it.
 // PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 #include "SettingsHolder.h"
+#include "CDebug.h"
 #include "D3D1XShader.h"
 #include "D3D1XStateManager.h"
 #include "RwRenderEngine.h"
@@ -57,9 +58,8 @@ void SettingsHolder::ReloadFile()
     {
         ResetSettings();
         SaveSettings();
-        // The defaults have to be read back as well as written. Every shader define list is built inside a
-        // block's Load, so a first run that stopped at SaveSettings would compile each settings-driven shader
-        // with none of its defines set and keep those defaults until the file was reloaded.
+        // Read back as well as written. Every shader define list is built inside a block's Load, so a first run that
+        // stopped at SaveSettings would compile each settings-driven shader with none of its defines set.
         mSettingsFile.LoadFile( m_sSettingsFileName.c_str() );
     }
     LoadSettings( mSettingsFile );
@@ -86,26 +86,36 @@ void TW_CALL ReloadDataCallBack( void *value )
 
 void SettingsHolder::InitGUI()
 {
-    if ( m_pGuiholder != nullptr )
+    // Nothing below is safe on a library that was never initialised, and TwInit is the only thing that makes it safe.
+    // Without the test the frame path called TwNewBar every idle frame, because a bar never created leaves the handle
+    // null and the second test would then never stop the retry.
+    if ( !m_bGUILibraryAvailable.load( std::memory_order_acquire ) ||
+        m_pGuiholder.load( std::memory_order_acquire ) != nullptr )
         return;
     // Init new settings bar
     TwDefine( " GLOBAL iconpos=topleft " );
-    m_pGuiholder = TwNewBar( "Settings" );
+    // Published once, before the blocks and buttons are added, so a second call arrives at a handle already set. A refused
+    // bar is not published: leaving the handle null is what lets the next frame retry.
+    TwBar* pGuiholder = TwNewBar( "Settings" );
+    if ( pGuiholder == nullptr )
+        return;
+    m_pGuiholder.store( pGuiholder, std::memory_order_release );
     // The bar is shown and hidden with F12, so its own minimise button would leave it collapsed with no way back.
     TwDefine( " Settings label='RenderHook Settings (F12)' position='16 16' size='260 360' iconifiable=false " );
     // Init each settings block
     for ( auto block : m_aSettingsBlocks )
-        block->InitGUI( m_pGuiholder );
+        block->InitGUI( pGuiholder );
     // Init save and reload buttons
-    TwAddButton( m_pGuiholder, "Save", SaveDataCallBack, nullptr, "" );
-    TwAddButton( m_pGuiholder, "Reload", ReloadDataCallBack, nullptr, "" );
+    TwAddButton( pGuiholder, "Save", SaveDataCallBack, nullptr, "" );
+    TwAddButton( pGuiholder, "Reload", ReloadDataCallBack, nullptr, "" );
 }
 
 void SettingsHolder::DrawGUI()
 {
-    // TwDraw writes to the device context and every call below only repairs what TwDraw changed, so the
-    // gate has to cover the whole body: with the bar hidden there is nothing drawn and nothing to repair.
-    if ( !m_bDrawTweakBar || m_pGuiholder == nullptr ) return;
+    // TwDraw writes to the device context and every call below only repairs what TwDraw changed, so the gate covers the
+    // whole body: with the bar hidden nothing is drawn and there is nothing to repair.
+    if ( !m_bDrawTweakBar.load( std::memory_order_acquire ) ||
+        m_pGuiholder.load( std::memory_order_acquire ) == nullptr ) return;
 
     TwDraw();
     if ( g_pStateMgr )
@@ -123,32 +133,66 @@ void SettingsHolder::DrawGUI()
 
 bool SettingsHolder::IsGUIEnabled()
 {
-    return m_bDrawTweakBar;
+    return m_bDrawTweakBar.load( std::memory_order_acquire );
 }
 
 void SettingsHolder::EnableGUI()
 {
-    // Called every frame while the bar is visible, so the definition below must run only on the transition.
-    if ( m_bDrawTweakBar )
+    // Called every frame while the bar is visible, so the definition below runs only on the transition. Refused while the
+    // library is not initialised, because the flag it sets is what the input hooks test before forwarding a message.
+    if ( !m_bGUILibraryAvailable.load( std::memory_order_acquire ) ||
+        m_bDrawTweakBar.load( std::memory_order_acquire ) )
         return;
-    m_bDrawTweakBar = true;
-    if ( m_pGuiholder != nullptr )
+    m_bDrawTweakBar.store( true, std::memory_order_release );
+    if ( m_pGuiholder.load( std::memory_order_acquire ) != nullptr )
         TwDefine( " Settings iconified=false " );
 }
 
 void SettingsHolder::DisableGUI()
 {
-    if ( !m_bDrawTweakBar )
+    if ( !m_bDrawTweakBar.load( std::memory_order_acquire ) )
         return;
-    m_bDrawTweakBar = false;
-    // The bar takes the mouse capture while visible, so the capture is only released on the enabled to
-    // disabled transition, which is the only path where this code takes the capture away.
+    m_bDrawTweakBar.store( false, std::memory_order_release );
+    // The bar takes the mouse capture while visible, so the capture is released only on the enabled to disabled transition.
     ReleaseCapture();
-    // AntTweakBarHookMsgProc stops forwarding messages to the bar while it is disabled, so a button release
-    // arriving after this point never reaches AntTweakBar and a drag would still be running when the bar returns.
-    // The release is delivered here instead, on the same transition and nowhere else.
-    if ( m_pGuiholder != nullptr )
+    // AntTweakBarHookMsgProc stops forwarding messages to the bar while it is disabled, so a button release arriving after
+    // this point never reaches AntTweakBar and a drag would still be running when the bar returns. It is delivered here.
+    if ( m_pGuiholder.load( std::memory_order_acquire ) != nullptr )
         TwMouseButton( TW_MOUSE_RELEASED, TW_MOUSE_LEFT );
+}
+
+void SettingsHolder::TerminateGUI()
+{
+    // The library owns the bar and destroys it at terminate. A handle left here would be non-null, so InitGUI's test would
+    // return early every frame and the settings screen would never come back. The visible flag goes with it, because
+    // EnableGUI returns early while it is already set and the new bar would then never be shown.
+    m_pGuiholder.store( nullptr, std::memory_order_release );
+    m_bDrawTweakBar.store( false, std::memory_order_release );
+    // Read and cleared in one step, so the answer and the refusal come out of the same write and every entry point above
+    // refuses from here on. The handle and both flags are atomic, so another thread reads either the value before the clear
+    // or the one written by it. A frame already inside TwDraw isnt stopped, and is what makes the terminate fail.
+    const bool bLibraryWasLive = m_bGUILibraryAvailable.exchange( false, std::memory_order_release );
+    if ( !bLibraryWasLive )
+        return;
+    // Zero has two causes in the library and they differ in what follows, so the line below names both. TwFreeAsyncDrawing
+    // refusing because a draw is in flight returns before anything is freed, so the next TwInit is refused. ITwGraph::Delete
+    // failing returns zero after the library was torn down anyway, so the next TwInit succeeds and the bar is rebuilt.
+    if ( !TwTerminate() && g_pDebug )
+        g_pDebug->printError( "AntTweakBar did not confirm its shutdown, so the settings bar is unavailable until the "
+                              "engine is started again: either a draw was still in flight and the library and its bar "
+                              "remain loaded, in which case the next start cannot re-initialise it, or its graph object "
+                              "could not be deleted after the library was torn down, in which case the next start "
+                              "rebuilds the bar." );
+}
+
+void SettingsHolder::SetGUILibraryAvailable( bool bAvailable )
+{
+    m_bGUILibraryAvailable.store( bAvailable, std::memory_order_release );
+}
+
+bool SettingsHolder::IsGUILibraryAvailable() const
+{
+    return m_bGUILibraryAvailable.load( std::memory_order_acquire );
 }
 
 void DebugSettingsBlock::Reset()

@@ -722,9 +722,10 @@ template <> Wrapper<IDirect3D9Wrapper> &Wrapper<IDirect3D9Wrapper>::Inst()
 
 void SampHaxx::Patch()
 {
-    // Through the shared writer for its region and protection handling, so an uncommitted slot is refused rather
-    // than faulting on the write. The address itself is trusted, not checked, and the writer reports its own
-    // refusals.
+    // Through the shared writer for its region and protection handling, so an uncommitted slot is refused rather than
+    // faulting on the write. The address itself is trusted, not checked, and the writer reports its own refusals.
+    // Deliberately not held the way the fixed callback sites are: this slot is the device the game's renderer is handed,
+    // and a host that owns Direct3D 9 replaces it by design, so writing our wrapper back would fight its device management.
     SetPointer( 0xC97C28, reinterpret_cast<void *>( Wrapper<IDirect3DDevice9Wrapper>::Inst().Get() ) );
     //IDirect3D9Wrapper
 }

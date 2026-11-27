@@ -41,9 +41,15 @@ void CCustomBuildingDNPipeline__Render( RwResEntry *repEntry, void *object,
 }
 void CCustomBuildingDNPipeline::Patch()
 {
-    SetPointer( 0x5D67F4, CCustomBuildingDNPipeline__Render );
-    SetPointer( 0x815EDF, CCustomBuildingDNPipeline__Render );
-    SetPointer( 0x815F65, CCustomBuildingDNPipeline__Render );
+    // The first site is this pipeline's own render callback, pushed where its object pipe is created. The other two are the
+    // MatFX atomic render callback, and that is what an ordinary atomic is drawn through, so a value there that does not
+    // reach this renderer takes the whole map while anything drawn by another pipeline still appears.
+    SetPointerExclusive( "Building DN: render callback", 0x5D67F4,
+                         reinterpret_cast<void *>( &CCustomBuildingDNPipeline__Render ), SITE_PREFIX_PUSH_IMM32 );
+    SetPointerExclusive( "MatFX: atomic render callback (first)", 0x815EDF,
+                         reinterpret_cast<void *>( &CCustomBuildingDNPipeline__Render ), SITE_PREFIX_PUSH_IMM32 );
+    SetPointerExclusive( "MatFX: atomic render callback (second)", 0x815F65,
+                         reinterpret_cast<void *>( &CCustomBuildingDNPipeline__Render ), SITE_PREFIX_PUSH_IMM32 );
 }
 
 void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
@@ -64,8 +70,8 @@ void CCustomBuildingDNPipeline::Render( RwResEntry *repEntry, void *object,
 
     if ( !entryData->header.indexBuffer )
     {
-        g_pDebug->printMsg(
-            "CustomBuildingDNPipeline: empty index buffer found", 0 );
+        // Once per run, because this is reached for every object drawn and printMsg writes every call.
+        g_pDebug->printError( "CustomBuildingDNPipeline: empty index buffer found" );
         return;
     }
 

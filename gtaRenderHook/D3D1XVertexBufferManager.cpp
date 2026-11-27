@@ -20,9 +20,13 @@ void CD3D1XVertexBufferManager::Remove( CD3D1XVertexBuffer*& buf )
 
 void CD3D1XVertexBufferManager::Shutdown()
 {
+    // Emptied as well as nulled, because this runs once per Stop and again from Close, and a repeated run is allowed.
+    // Nulling alone leaves a node per buffer that nothing can reclaim, because Remove looks its entry up by value and no
+    // caller passes null. AddNew does not read the entries it walks past, so those nodes cost memory rather than a fault.
     for ( auto &buf : bufferList )
     {
         delete buf;
         buf = nullptr;
     }
+    bufferList.clear();
 }

@@ -45,8 +45,16 @@ void CCustomBuildingPipeline__Render( RwResEntry *repEntry, void *object,
 }
 void CCustomBuildingPipeline::Patch()
 {
-    SetPointer( 0x5D7B0B, CCustomBuildingPipeline__Render );
-    SetPointer( 0x7578AE, CCustomBuildingPipeline__Render );
+    // The path every ordinary building is drawn through, so a value here that does not reach our renderer leaves the static
+    // map invisible while the rest of the frame keeps running.
+    SetPointerExclusive( "Building: render callback", 0x5D7B0B,
+                         reinterpret_cast<void *>( &CCustomBuildingPipeline__Render ), SITE_PREFIX_PUSH_IMM32 );
+    // The instance callback is the operand of a mov dword ptr [eax+0Ch], imm32 at 0x007578AE, so its prefix is opcode,
+    // ModRM and displacement rather than one opcode byte. 0Ch is the field an atomic is drawn through, where the game
+    // stores __rxD3D9DefaultRenderCallback; the neighbouring site at 0x00757899 writes the field at 0.
+    SetPointerExclusive( "Building: default render callback", 0x7578AE,
+                         reinterpret_cast<void *>( &CCustomBuildingPipeline__Render ),
+                         SITE_PREFIX_MOV_EAX_DISP8_IMM32 );
 }
 void CCustomBuildingPipeline::ResetAlphaList() { m_aAlphaMeshList.Clean(); }
 
@@ -127,8 +135,8 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
         stride, offset );
     if ( !entryData->header.indexBuffer )
     {
-        g_pDebug->printMsg( "CCustomBuildingPipeline: empty index buffer found",
-                            0 );
+        // Once per run, because this is reached for every object drawn and printMsg writes every call.
+        g_pDebug->printError( "CCustomBuildingPipeline: empty index buffer found" );
         return;
     }
     g_pStateMgr->SetIndexBuffer(
@@ -187,10 +195,9 @@ void CCustomBuildingPipeline::Render( RwResEntry *repEntry, void *object,
             g_pRenderBuffersMgr->UpdateMaterialEmmissiveColor( color );
         else
             g_pRenderBuffersMgr->UpdateMaterialDiffuseColor( color );
-        // The shadow stage draws with SACustomBuilding's ShadowPS, which reads txDiffuse and cDiffuseColor, so the
-        // diffuse and emissive updates above have to stay unconditional or alpha-cutout shadows lose their cutout.
-        // Specular and glossiness are not read by that shader at all, so the two engine queries that produce them are
-        // skipped for that stage as well, not just the buffer writes they feed.
+        // The shadow stage draws with SACustomBuilding's ShadowPS, which reads txDiffuse and cDiffuseColor, so the diffuse
+        // and emissive updates above stay unconditional or alpha-cutout shadows lose their cutout. Specular and glossiness
+        // arent read by that shader, so the two engine queries producing them are skipped too, not just their writes.
         if ( m_uiDeferredStage != 2 )
         {
             float fSpec = ( std::max )(

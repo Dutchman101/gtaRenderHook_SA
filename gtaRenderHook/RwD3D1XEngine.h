@@ -1,5 +1,7 @@
 #pragma once
+#include <atomic>
 #include "RwRenderEngine.h"
+#include "D3DRenderer.h"
 class CD3DRenderer;
 class CD3D1XIm2DPipeline;
 class CD3D1XIm3DPipeline;
@@ -107,6 +109,45 @@ public:
     RwRaster * CreateD3D9Raster( RwInt32 width, RwInt32 height, D3DFORMAT format, RwInt32 flags );
     std::list<RwRaster*> m_pRastersToReload{};
     bool m_bScreenSizeChanged = false;
-    bool m_bAntTweakBarAvaliable = false;
 };
+
+// True only between a Start that finished building every manager and pipeline and the first release in Stop, and false
+// again from the moment a Stop or a Close begins. Atomic because a host can drive frames on its own thread.
+inline std::atomic<bool> g_bRenderEngineFrameReady{ false };
+
+// The engine the RenderWare dispatch calls through, or null when there is none.
+inline CRwD3D1XEngine *RenderHookEngine()
+{
+    return static_cast<CRwD3D1XEngine *>( g_pRwCustomEngine );
+}
+
+// A renderer exists, so the entry points that only reach the renderer can run. Wider than the frame gate below, because a
+// pipeline built during Start creates rasters through these same entry points.
+inline bool IsRendererOpen()
+{
+    CRwD3D1XEngine *pEngine = RenderHookEngine();
+    return pEngine != nullptr && pEngine->getRenderer() != nullptr;
+}
+
+// A renderer exists and both parts of its device binding exist. Narrower than the test above for the window between a Stop
+// and the next Start: the renderer object survives there, so that test answers true and every call below would reach a
+// device that isnt there. The context is tested with it because InitDevice assigns the device then the context and
+// DeInitDevice releases them in the opposite order, and RasterLock and RasterUnlock reach the context.
+inline bool IsRendererDeviceReady()
+{
+    CRwD3D1XEngine *pEngine = RenderHookEngine();
+    if ( pEngine == nullptr )
+        return false;
+    CD3DRenderer *pRenderer = pEngine->getRenderer();
+    if ( pRenderer == nullptr )
+        return false;
+    return pRenderer->getDevice() != nullptr && pRenderer->getContext() != nullptr;
+}
+
+// Everything a frame draws through exists. Stop releases the managers and pipelines before the device and Close deletes the
+// renderer, so a frame arriving after either began would reach a null pointer; the wrappers refuse on this instead.
+inline bool IsRenderFrameReady()
+{
+    return g_bRenderEngineFrameReady.load( std::memory_order_acquire ) && IsRendererOpen();
+}
 

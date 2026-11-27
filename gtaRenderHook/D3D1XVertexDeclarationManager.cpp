@@ -19,8 +19,13 @@ CD3D1XVertexDeclaration * CD3D1XVertexDeclarationManager::AddNew( CD3D1XShader* 
 
 void CD3D1XVertexDeclarationManager::Shutdown()
 {
+    // Every entry is nulled and the list is emptied, because this runs once per Stop and a repeated Stop is allowed.
+    // A list left holding released pointers is walked again by AddNew, which reads each entry's shader and flags
+    // before it decides whether to create another one.
     for ( auto &vdecl : vdeclList )
     {
         delete vdecl;
+        vdecl = nullptr;
     }
+    vdeclList.clear();
 }

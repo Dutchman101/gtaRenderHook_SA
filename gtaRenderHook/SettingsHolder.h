@@ -4,6 +4,7 @@
 #include <tinyxml2.h>
 #include <AntTweakBar.h>
 #pragma warning( pop )
+#include <atomic>
 #include <unordered_map>
 #include "SettingsFields.h"
 class SettingsBlock;
@@ -42,6 +43,14 @@ public:
     void EnableGUI();
     /// Disables AntTweakBar GUI Display
     void DisableGUI();
+    /// Ends the AntTweakBar library and discards the GUI state its termination destroys. Safe on a library that was
+    /// never started, so a teardown does not have to know whether an init ran first.
+    void TerminateGUI();
+    /// Records whether the AntTweakBar library is initialised. Set where a TwInit succeeds and cleared where the
+    /// library is terminated, so it is the one fact that answers whether any entry point above may call into it.
+    void SetGUILibraryAvailable( bool bAvailable );
+    /// True while the library is initialised, so the settings bar either exists or can still be created.
+    bool IsGUILibraryAvailable() const;
 private:
     /// Loads settings from XML file
     void LoadSettings( const tinyxml2::XMLDocument &file );
@@ -50,8 +59,12 @@ private:
     tinyxml2::XMLDocument			mSettingsFile;
     static std::string m_sSettingsFileName;
     bool m_bInitialized = false;
-    bool m_bDrawTweakBar = false;
-    TwBar* m_pGuiholder = nullptr;
+    // Written by the start and stop path and read by the frame path and the AntTweakBar message hook, which a host driving
+    // frames on its own thread can reach from another thread, so the handle and the two flags below are atomic and every use
+    // names its ordering. The same defence the frame gate in RwD3D1XEngine.h carries. See TerminateGUI for what it cant order.
+    std::atomic<bool> m_bDrawTweakBar = false;
+    std::atomic<TwBar*> m_pGuiholder = nullptr;
+    std::atomic<bool> m_bGUILibraryAvailable = false;
 };
 
 /*!

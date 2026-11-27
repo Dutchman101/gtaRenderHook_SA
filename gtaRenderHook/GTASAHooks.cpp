@@ -38,7 +38,8 @@ void CGTASAHooks::Patch()
     CVisibilityPluginsRH::Patch();
     CStreamingRH::Patch();
 
-    SetPointer( 0x4C9AB5, RwD3D11RasterDestructor );
+    SetPointerExclusive( "Raster: destructor callback", 0x4C9AB5,
+                         reinterpret_cast<void *>( &RwD3D11RasterDestructor ), SITE_PREFIX_PUSH_IMM32 );
 
     RedirectJump( 0x730830, InitD3DCacheSystem );
     RedirectJump( 0x730A00, ShutdownD3DCacheSystem );

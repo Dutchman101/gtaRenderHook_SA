@@ -462,10 +462,13 @@ void CSAIdleHook::Patch()
                 g_pDebug->printError( "Grass hook: the plant colour callback is not the function this hook was built "
                                       "for at an address this process can execute inside its own image, so the game "
                                       "keeps the callback it set up itself" );
-            else if ( SetPointer( GRASS_CALLBACK_SITE + PUSH_IMM32_OPCODE_LENGTH,
-                                  reinterpret_cast<void *>( SetGrassMaterialColour ) ) == EWriteResult::Failed )
-                g_pDebug->printError( "Grass hook: the site the plant colour callback is written to could not be "
-                                      "made writable, so the game keeps the callback it set up itself" );
+            else if ( SetPointerExclusive( "Grass: plant colour callback",
+                                           GRASS_CALLBACK_SITE + PUSH_IMM32_OPCODE_LENGTH,
+                                           reinterpret_cast<void *>( SetGrassMaterialColour ),
+                                           SITE_PREFIX_PUSH_IMM32 ) == EWriteResult::Failed )
+                g_pDebug->printError( "Grass hook: the site the plant colour callback is written to was refused, so "
+                                      "the game keeps the callback it set up itself. The refusal is reported above "
+                                      "this line, with the state the site was left in" );
         }
         else if ( grassOperand != reinterpret_cast<UINT_PTR>( &SetGrassMaterialColour ) )
             g_pDebug->printError( "Grass hook: the plant colour callback is not where this hook expects it, so the "
@@ -494,12 +497,17 @@ void CSAIdleHook::Patch()
                               "not run" );
         return;
     }
+    // Asked once, because the gate below and the refusal past it both depend on it: whether the entry already carries this
+    // hook's jump decides both whether a site that is not itself a jump may go on to the redirect, and what a refusal after
+    // that point means for the frame pipeline.
+    const bool bIdleEntryHoldsThisHook =
+        HoldsOwnBranch( IDLE_FUNCTION_ADDRESS, REL32_JUMP_OPCODE, reinterpret_cast<void *>( &Idle ) );
     if ( idlePrefix == EBytesMatch::Mismatch )
     {
-        if ( HoldsOwnBranch( IDLE_FUNCTION_ADDRESS, REL32_JUMP_OPCODE, reinterpret_cast<void *>( &Idle ) ) )
-            return;
-        // Another module's hook owns this entry, so take the site and keep its target for the chain.
-        if ( pIdle[0] != REL32_JUMP_OPCODE )
+        // Already holding this hook's branch isnt a reason to leave before the redirect: InstallJump records the site on
+        // that path too, and returning here would register the idle entry only on the pass that wrote it, leaving the one
+        // site whose loss stops the whole frame pipeline out of the frame check on every later pass.
+        if ( !bIdleEntryHoldsThisHook && pIdle[0] != REL32_JUMP_OPCODE )
         {
             g_pDebug->printError( "Idle hook: this executable's idle function is not the one the hook was built "
                                   "for, so it was left alone and this plugin's frame pipeline will not run" );
@@ -518,9 +526,18 @@ void CSAIdleHook::Patch()
          !HoldsExpectedBytes( IDLE_INNER_CALL, g_aExpectedInnerCallPrologue,
                               sizeof( g_aExpectedInnerCallPrologue ) ) )
     {
-        g_pDebug->printError( "Idle hook: the call the trampoline re-enters is not the function this hook was built "
-                              "for at an address this process can execute inside its own image, so it was left "
-                              "alone and this plugin's frame pipeline will not run" );
+        // The fall-through above reaches this while this plugin's own jump is already in the entry, and in that state the
+        // entry stays hooked whatever this check decides, so the two states are told apart rather than both reported as a
+        // frame pipeline that will not run.
+        if ( bIdleEntryHoldsThisHook )
+            g_pDebug->printError( "Idle hook: the call the trampoline re-enters is not the function this hook was "
+                                  "built for at an address this process can execute inside its own image. The idle "
+                                  "entry already carries this hook's jump, so the entry stays hooked and its trampoline "
+                                  "jumps to an idle body this plugin was never checked against" );
+        else
+            g_pDebug->printError( "Idle hook: the call the trampoline re-enters is not the function this hook was "
+                                  "built for at an address this process can execute inside its own image, so it was "
+                                  "left alone and this plugin's frame pipeline will not run" );
         return;
     }
 
@@ -893,6 +910,10 @@ void CSAIdleHook::Idle( void *Data )
             if ( !FrontEndMenuManager.m_bMenuActive )
                 CTimer::m_UserPause = false;
         }
+        // For the same reason the active path below checks before it touches the world: the idle handed over to here
+        // advances the frame and creates the pipeline nodes that record the callback their push instruction carried,
+        // so a site put back after this call is put back for the next frame's creations and not for this one's.
+        RevalidateOwnedSites();
         // The hook this install displaced is only reachable through this entry, so the frame is handed over here.
         const UINT_PTR ullDisabledChain = s_ullChainedIdleTarget.load( std::memory_order_acquire );
         if ( ullDisabledChain != 0 )
@@ -908,9 +929,11 @@ void CSAIdleHook::Idle( void *Data )
         ReportIdleFrameAbandoned( "the idle entry was called with no data argument" );
         return;
     }
-    // The displaced hook is not called here. It was displaced from this entry, so it either runs an idle of its own
-    // or resumes into the game's own idle body through its trampoline, and the updates below would then advance the
-    // same frame a second time. The pass-through branch above is where that handover belongs.
+    // The displaced hook is not called here: it was displaced from this entry, so it either runs an idle of its own or
+    // resumes into the game's own idle body through its trampoline, and the updates below would advance the same frame a
+    // second time. Before anything below touches the world, because one of the reads this feeds caches what it finds: a
+    // pipeline node records the callback its push instruction carried when it was created. Present() runs it as well.
+    RevalidateOwnedSites();
     SettingsHolder::Instance()->ReloadShadersIfRequired();
     // Update timers
     TimeUpdate();
@@ -1024,10 +1047,9 @@ void CSAIdleHook::UpdateShadowDNBalance()
         fBalance = 1.0f - ( 1140.0f - currentMinutes ) / 60.0f;
 
     m_fShadowDNBalance = fBalance;
-    // The game's day/night blend weight is written by its custom building renderer update, and this loop
-    // replaces that update, so nothing else writes it while the game runs. Building colours, particles,
-    // skidmarks and the exposure of every pixel read it, and all of them would otherwise see the value it
-    // was initialised to, which is full night, for the whole session.
+    // The game's day/night blend weight is written by its custom building renderer update, and this loop replaces that
+    // update, so nothing else writes it while the game runs. Building colours, particles, skidmarks and the exposure of
+    // every pixel read it, and would otherwise see the value it was initialised to, which is full night, all session.
     if ( g_bDayNightBalanceStorable )
         *(float*)( GAME_DAY_NIGHT_BALANCE_ADDR ) = fBalance;
 }
@@ -1356,10 +1378,9 @@ void CSAIdleHook::RenderRealTimeShadows( const RwV3d &sundir )
 
     auto shadowRenderer = g_pDeferredRenderer->m_pShadowRenderer;
     m_uiDeferredStage = 2;
-    // DefinedState has already forced rwCULLMODECULLNONE for the frame, and the cubemap pass sets it again, so
-    // every cascade was rasterising both faces of every caster. Back-face culling is correct here because the
-    // near surface seen from the sun is the one that casts. The mode goes back afterwards so this stays scoped
-    // to the cascade pass and the G-buffer pass that follows keeps the state it had before.
+    // DefinedState has already forced rwCULLMODECULLNONE for the frame, and the cubemap pass sets it again, so every
+    // cascade was rasterising both faces of every caster. Back-face culling is right here because the near surface seen
+    // from the sun is the one that casts. The mode goes back afterwards so this stays scoped to the cascade pass.
     const RwCullMode savedCullMode = g_pStateMgr->GetCullMode();
     g_pStateMgr->SetCullMode( rwCULLMODECULLBACK );
     // with some cascades kept from earlier frames, each re-rendered cascade clears its own region instead
