@@ -22,6 +22,7 @@
 #include "CVisibilityPluginsRH.h"
 #include "AmbientOcclusion.h"
 #include "CloudRendering.h"
+#include "ChainHook.h"
 #include <game_sa\CPointLights.h> 
 #include <game_sa\CFont.h>
 #include <game_sa\CWorld.h>
@@ -420,6 +421,8 @@ constexpr size_t HEX_32_BIT_TEXT_LENGTH = 8;
 
 void CSAIdleHook::Patch()
 {
+    // dllmain already ran it; only the first call tests, and this keeps the dependency visible.
+    (void)RunChainSelfTest( "Idle hook" );
     (void)Render2dPass();
     // Settled before every return below, so a refusal at one of the sites that follow doesnt take the weight down
     // with it.
@@ -541,6 +544,8 @@ void CSAIdleHook::Patch()
         return;
     }
 
+    // Disabled path only, never armed: this handler holds three scope guards and a hand over would discard the frame
+    // without running any of them, which stops the renderer.
     UINT_PTR ullChainedIdle = 0;
     const EWriteResult idleInstall =
         RedirectJump( IDLE_FUNCTION_ADDRESS, reinterpret_cast<void *>( Idle ), &ullChainedIdle );

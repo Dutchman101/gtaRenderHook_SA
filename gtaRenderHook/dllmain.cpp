@@ -4,6 +4,7 @@
 //#include "RwRenderEngine.h"
 #include "RwD3D1XEngine.h"
 #include "SAIdleHook.h"
+#include "ChainHook.h"
 #include "CustomBuildingPipeline.h"
 #include "CustomBuildingDNPipeline.h"
 #include "CustomCarFXPipeline.h"
@@ -101,6 +102,8 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         SetPatchNoteSink( ReportPatchNoteToLog );
         g_pRwCustomEngine = new CRwD3D1XEngine( g_pDebug );
 
+        // Before the first patch, since the hand over refuses until a frame went all the way round at run time.
+        (void)RunChainSelfTest( "Install" );
         // Path rw/game stuff
         CRwGameHooks::Patch( CRwGameHooks::ms_rwPointerTableSA );
         CGTASAHooks::Patch();

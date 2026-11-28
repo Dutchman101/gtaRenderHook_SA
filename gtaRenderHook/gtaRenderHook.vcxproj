@@ -187,6 +187,7 @@
     <ClInclude Include="HDRTonemapping.h" />
     <ClInclude Include="LightManager.h" />
     <ClInclude Include="MemoryFuncs.h" />
+    <ClInclude Include="ChainHook.h" />
     <ClInclude Include="PBSMaterial.h" />
     <ClInclude Include="PostProcessEffect.h" />
     <ClInclude Include="Renderer.h" />

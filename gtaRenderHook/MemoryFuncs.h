@@ -86,14 +86,16 @@ inline bool ReportPatchNote( const char *operation, const char *note )
     return bLanded;
 }
 
-// A note raised from a thread that must not report: the streaming hook runs on the game's streaming thread, where a
-// report would wait on the logger's mutex and the disk write inside it. One slot, delivered from the frame path, so a
-// newer note overwrites an undelivered one; each carries an event ordinal, which is what makes that bounded. The text is
-// copied in, so a caller's formatted buffer can go out of scope at once.
+// One slot for a note raised off the frame path: copied, since it is read after the producer is gone.
 constexpr size_t LATCHED_NOTE_TEXT_LENGTH = 512;
-inline std::atomic<const char *> g_pLatchedNoteOperation{ nullptr };
-inline std::atomic<const char *> g_pLatchedNoteText{ nullptr };
+constexpr size_t LATCHED_NOTE_OPERATION_LENGTH = 64;
 inline std::atomic<bool> g_bLatchedNotePending{ false };
+
+inline char *LatchedNoteOperation()
+{
+    static char s_szOperation[LATCHED_NOTE_OPERATION_LENGTH]{};
+    return s_szOperation;
+}
 
 inline char *LatchedNoteText()
 {
@@ -117,10 +119,8 @@ inline void LatchPatchNote( const char *pOperation, const char *pNote )
     // makes the flag answer whether anything is waiting.
     {
         std::lock_guard<std::mutex> guard( LatchedNoteMutex() );
-        char *pLatched = LatchedNoteText();
-        _snprintf_s( pLatched, LATCHED_NOTE_TEXT_LENGTH, _TRUNCATE, "%s", pNote );
-        g_pLatchedNoteOperation.store( pOperation, std::memory_order_relaxed );
-        g_pLatchedNoteText.store( pLatched, std::memory_order_relaxed );
+        _snprintf_s( LatchedNoteOperation(), LATCHED_NOTE_OPERATION_LENGTH, _TRUNCATE, "%s", pOperation );
+        _snprintf_s( LatchedNoteText(), LATCHED_NOTE_TEXT_LENGTH, _TRUNCATE, "%s", pNote );
         g_bLatchedNotePending.store( true, std::memory_order_release );
     }
 }
@@ -133,25 +133,18 @@ inline void DeliverLatchedPatchNote()
     // Copied out under the producer's mutex, reported after it is released: the logger writes the file inside its own
     // lock, and a disk write is the last thing the streaming thread should wait on. Zeroed here so the buffer is a valid
     // empty string on every path out.
+    char operation[LATCHED_NOTE_OPERATION_LENGTH]{};
     char note[LATCHED_NOTE_TEXT_LENGTH]{};
-    const char *pOperation = nullptr;
     {
         std::lock_guard<std::mutex> guard( LatchedNoteMutex() );
         if ( !g_bLatchedNotePending.load( std::memory_order_relaxed ) )
             return;
-        pOperation = g_pLatchedNoteOperation.load( std::memory_order_relaxed );
-        const char *pLatched = g_pLatchedNoteText.load( std::memory_order_relaxed );
-        if ( pOperation == nullptr || pLatched == nullptr )
-        {
-            g_bLatchedNotePending.store( false, std::memory_order_relaxed );
-            return;
-        }
-        // Bounded copy, so the logger's %s scan cant run past this buffer whatever the producer left in the slot.
-        _snprintf_s( note, sizeof( note ), _TRUNCATE, "%s", pLatched );
+        _snprintf_s( operation, sizeof( operation ), _TRUNCATE, "%s", LatchedNoteOperation() );
+        _snprintf_s( note, sizeof( note ), _TRUNCATE, "%s", LatchedNoteText() );
         // Cleared under the mutex: a latch after this point is delivered next frame, one before it is this copy.
         g_bLatchedNotePending.store( false, std::memory_order_relaxed );
     }
-    ReportPatchNote( pOperation, note );
+    ReportPatchNote( operation, note );
 }
 
 enum class EMemoryAccess
@@ -379,8 +372,7 @@ struct SPatchWriterSlot
     }
 };
 
-// Why a write was refused or left unclean. The caller needs the reason to word its own line, because a refusal and a
-// write that landed without its protection back are not the same state.
+// Why a write was refused or left unclean. One per write, since the flags only ever get set.
 struct SWriteRefusal
 {
     bool m_bNotOneRegion = false;
@@ -649,9 +641,7 @@ inline bool HoldsExpectedBytes( UINT_PTR address, const void *expected, SIZE_T l
     return CompareExpectedBytes( address, expected, length ) == EBytesMatch::Match;
 }
 
-// A hook is written once and was never read again. A taken value site stops one pass drawing; a taken idle entry stops
-// the frame pipeline being called at all, so both are checked twice a frame. Rows are written by the two functions
-// below rather than by their callers, so a hook added later is covered without its call site knowing this table exists.
+// The module that displaced a taken site, read every frame long after install.
 constexpr size_t SITE_OWNER_NAME_LENGTH = 96;
 
 // Leaf name of the module owning the page an address sits in, so a displaced site names the tool that displaced it
@@ -693,6 +683,9 @@ inline void DescribeAddressOwner( UINT_PTR ullValue, char *pOut, size_t uiOutSiz
 
 constexpr unsigned long MAX_HELD_CODE_SITES = 48;
 
+// Re-takes allowed per site before standing down. Refusals spend one each, which bounds the log.
+constexpr unsigned long MAX_CODE_SITE_RETAKES = 3;
+
 struct SHeldCodeSite
 {
     const char *m_pName;
@@ -700,8 +693,15 @@ struct SHeldCodeSite
     void *m_pFunc;
     unsigned char m_ucOpcode;
     bool m_bSitePinned;
-    // One bit per state, since one flag would let the first cause reported silence a later one still present.
-    unsigned long m_ulStateReported;
+    std::atomic<unsigned long> m_ulStateReported;
+    // Only the atomics cross threads. The rest settle before the count publishes the row. Chain target is where frames
+    // go when another module held the entry, zero for none.
+    std::atomic<UINT_PTR> m_ullChainTarget;
+    unsigned long m_ulRetakeAttempts;
+    // Evidence arming was true: a re-take while this is zero drops the other module's hook.
+    std::atomic<unsigned long> m_ulCompletedHandOvers;
+    std::atomic<bool> m_bChainsFrame;
+    bool m_bContested;
 };
 
 // Four outcomes, because an unreadable site, a site that is no longer a branch, a branch going elsewhere and our own
@@ -713,6 +713,10 @@ enum class ECodeSiteState
     HoldsOtherBranch,
     HoldsOurBranch
 };
+
+constexpr unsigned long CODE_SITE_REPORTED_UNREADABLE = 1UL << 0;
+constexpr unsigned long CODE_SITE_REPORTED_NOT_OURS = 1UL << 1;
+constexpr unsigned long CODE_SITE_REPORTED_OTHER_BRANCH = 1UL << 2;
 
 inline std::atomic<unsigned long> &HeldCodeSiteCount()
 {
@@ -726,8 +730,8 @@ inline SHeldCodeSite *HeldCodeSites()
     return s_aSites;
 }
 
-// Registered by site, so a second pass updates its row. The count is published last, so no row is read mid-fill.
-inline void RegisterHeldCodeSite( const char *pName, UINT_PTR ullSite, void *pFunc, unsigned char ucOpcode )
+// Registered by site, so a second pass updates its row. The count publishes last; a full table returns MAX_HELD_CODE_SITES.
+inline unsigned long RegisterHeldCodeSite( const char *pName, UINT_PTR ullSite, void *pFunc, unsigned char ucOpcode )
 {
     std::atomic<unsigned long> &ulCount = HeldCodeSiteCount();
     SHeldCodeSite *pSites = HeldCodeSites();
@@ -751,7 +755,7 @@ inline void RegisterHeldCodeSite( const char *pName, UINT_PTR ullSite, void *pFu
             ReportPatchFailure( pName, reinterpret_cast<void *>( ullSite ),
                                 "has no room left in the table of code hooks this plugin checks every frame, so this "
                                 "hook is installed and never checked again" );
-            return;
+            return MAX_HELD_CODE_SITES;
         }
         pRow = &pSites[ulRegistered];
         pRow->m_ullSite = ullSite;
@@ -761,7 +765,7 @@ inline void RegisterHeldCodeSite( const char *pName, UINT_PTR ullSite, void *pFu
     {
         // A repeat registration leaves the row alone: the fields rewritten below are what a frame check reads, and the
         // cleared state bits are what keep one fault from being reported on every later frame.
-        return;
+        return static_cast<unsigned long>( pRow - pSites );
     }
     pRow->m_pName = pName;
     pRow->m_pFunc = pFunc;
@@ -769,9 +773,48 @@ inline void RegisterHeldCodeSite( const char *pName, UINT_PTR ullSite, void *pFu
     // Proved once here and recorded on the row, so the frame check may read the branch without asking the kernel: five
     // bytes proved inside our own image cant be unmapped under a hook running out of it.
     pRow->m_bSitePinned = IsInHostImage( reinterpret_cast<const void *>( ullSite ), REL32_BRANCH_LENGTH );
-    pRow->m_ulStateReported = 0;
+    pRow->m_ulStateReported.store( 0, std::memory_order_release );
     if ( ulNewIndex != MAX_HELD_CODE_SITES )
+    {
+        // Only a new row starts the budget. One registered again keeps what it spent, or an install would reset it forever.
+        pRow->m_ullChainTarget = 0;
+        pRow->m_ulRetakeAttempts = 0;
+        pRow->m_ulCompletedHandOvers = 0;
+        pRow->m_bChainsFrame = false;
+        pRow->m_bContested = false;
         ulCount.store( ulNewIndex + 1, std::memory_order_release );
+        return ulNewIndex;
+    }
+    return static_cast<unsigned long>( pRow - pSites );
+}
+
+// Arms a site and publishes the branch its frames go to. Only a handler whose prologue saves no callee saved register
+// may arm, which is a per site fact from disassembly and why nothing arms today. A zero target means nothing displaced.
+inline void ArmHeldCodeSiteForChaining( unsigned long ulRow, UINT_PTR ullChainTarget )
+{
+    const unsigned long ulCount = HeldCodeSiteCount().load( std::memory_order_acquire );
+    if ( ulRow >= ulCount )
+        return;
+    SHeldCodeSite *pSites = HeldCodeSites();
+    if ( ullChainTarget != 0 )
+        pSites[ulRow].m_ullChainTarget.store( ullChainTarget, std::memory_order_release );
+    pSites[ulRow].m_bChainsFrame.store( true, std::memory_order_release );
+}
+
+inline UINT_PTR HeldCodeSiteChainTarget( unsigned long ulRow )
+{
+    const unsigned long ulCount = HeldCodeSiteCount().load( std::memory_order_acquire );
+    if ( ulRow >= ulCount )
+        return 0;
+    return HeldCodeSites()[ulRow].m_ullChainTarget.load( std::memory_order_acquire );
+}
+
+inline void NoteHeldCodeSiteHandOver( unsigned long ulRow )
+{
+    const unsigned long ulCount = HeldCodeSiteCount().load( std::memory_order_acquire );
+    if ( ulRow >= ulCount )
+        return;
+    HeldCodeSites()[ulRow].m_ulCompletedHandOvers.fetch_add( 1, std::memory_order_acq_rel );
 }
 
 // Reads the branch a registered site holds now and says which of the four states it is in. A pinned site copies its
@@ -867,13 +910,26 @@ inline EWriteResult InstallCall( UINT_PTR address, void *func )
     return result;
 }
 
-inline EWriteResult InstallJump( UINT_PTR address, void *func, UINT_PTR *pChainTarget = nullptr )
+// bReport false only for the re-take: a success line there would read as a fresh install.
+inline EWriteResult InstallJump( UINT_PTR address, void *func, UINT_PTR *pChainTarget = nullptr,
+                                 unsigned long *pSiteRow = nullptr, bool bReportWrite = true,
+                                 SWriteRefusal *pRefusal = nullptr, int iExpectedOpcode = -1 )
 {
     // Tested before the site is read for a jump, so one site reaches one verdict.
     if ( !IsExecutableRange( reinterpret_cast<const void *>( address ), REL32_BRANCH_LENGTH ) )
     {
         ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
                             "is not memory this process can execute, so no jump was written there" );
+        return EWriteResult::Failed;
+    }
+    // A caller naming the opcode overwrites another module's instruction: five bytes over a different framing splits it.
+    if ( iExpectedOpcode >= 0 &&
+         ( !IsReadableRange( reinterpret_cast<const void *>( address ), REL32_OPCODE_LENGTH ) ||
+           *reinterpret_cast<const unsigned char *>( address ) != static_cast<unsigned char>( iExpectedOpcode ) ) )
+    {
+        ReportPatchFailure( "RedirectJump", reinterpret_cast<void *>( address ),
+                            "no longer holds the jump this plugin wrote, so it was left as it stands rather than "
+                            "overwritten on a guess at how another module framed its instruction" );
         return EWriteResult::Failed;
     }
     // Kept until the write lands, so a failed write never leaves the target naming a hook we didnt displace.
@@ -894,7 +950,9 @@ inline EWriteResult InstallJump( UINT_PTR address, void *func, UINT_PTR *pChainT
                 *pChainTarget = 0;
             // Registered here too: the site holds our branch, which is what the frame check watches, and leaving it
             // unregistered would make a second pass stop watching every site the first one installed.
-            RegisterHeldCodeSite( "RedirectJump", address, func, REL32_JUMP_OPCODE );
+            const unsigned long ulHeldRow = RegisterHeldCodeSite( "RedirectJump", address, func, REL32_JUMP_OPCODE );
+            if ( pSiteRow != nullptr )
+                *pSiteRow = ulHeldRow;
             return EWriteResult::Clean;
         }
         // A jump leaving the host image isnt one of the executable's own thunks, so another module put it there.
@@ -958,7 +1016,8 @@ inline EWriteResult InstallJump( UINT_PTR address, void *func, UINT_PTR *pChainT
     jump[0] = REL32_JUMP_OPCODE;
     memcpy( jump + REL32_OPCODE_LENGTH, &rel, sizeof( rel ) );
     const EWriteResult result = WriteProtected( "RedirectJump", reinterpret_cast<void *>( address ), sizeof( jump ),
-                                                [&jump] ( void *destination ) { memcpy( destination, jump, sizeof( jump ) ); } );
+                                                [&jump] ( void *destination ) { memcpy( destination, jump, sizeof( jump ) ); },
+                                                bReportWrite, pRefusal );
     // Published only for a write that landed, and only to a caller that asked.
     if ( result != EWriteResult::Failed && pChainTarget != nullptr )
         *pChainTarget = ullChainTarget;
@@ -966,13 +1025,19 @@ inline EWriteResult InstallJump( UINT_PTR address, void *func, UINT_PTR *pChainT
     if ( result != EWriteResult::Failed && bDisplacedJumpWorthReporting )
         ReportPatchNote( "RedirectJump", szNote );
     if ( result != EWriteResult::Failed )
-        RegisterHeldCodeSite( "RedirectJump", address, func, REL32_JUMP_OPCODE );
+    {
+        const unsigned long ulHeldRow = RegisterHeldCodeSite( "RedirectJump", address, func, REL32_JUMP_OPCODE );
+        if ( pSiteRow != nullptr )
+            *pSiteRow = ulHeldRow;
+    }
     return result;
 }
 
-inline EWriteResult RedirectJump( UINT_PTR address, void *func, UINT_PTR *pChainTarget = nullptr )
+inline EWriteResult RedirectJump( UINT_PTR address, void *func, UINT_PTR *pChainTarget = nullptr,
+                                  unsigned long *pSiteRow = nullptr, bool bReportWrite = true,
+                                  SWriteRefusal *pRefusal = nullptr, int iExpectedOpcode = -1 )
 {
-    return InstallJump( address, func, pChainTarget );
+    return InstallJump( address, func, pChainTarget, pSiteRow, bReportWrite, pRefusal, iExpectedOpcode );
 }
 
 // Fixed sites in this process are written by more than this plugin. The code hooks above classify what a site holds and
@@ -1464,9 +1529,119 @@ inline void ReportRestoreOutcomeOnce( SExclusiveSlot &slot, EWriteResult result,
     slot.m_ulRestoreReported |= ulOutcome;  // after the report, so one that failed stays reportable
 }
 
-// Called at the top of a frame and again at its end, and a read only: putting a displaced code hook back is deliberately
-// not attempted, since that is a five byte write over an instruction another module already rewrote and only the writer
-// that displaced it knows what the bytes around it mean. One report per distinct state, not one per site.
+// The re-take writes quietly, so the quiet flag also silences the writer's own line for the two unclean outcomes.
+inline void ReportReclaimWriteOutcome( const SHeldCodeSite &site, EWriteResult result, const SWriteRefusal &refusal )
+{
+    if ( result == EWriteResult::Clean )
+        return;
+    if ( result == EWriteResult::Failed )
+    {
+        // The writer's own reasons. A refusal InstallJump decided before writing sets none, so this is the general case.
+        const char *pBecause = "because the install refused this site rather than write there, and named its reason above this line";
+        if ( refusal.m_bNotOneRegion )
+            pBecause = "because the site no longer sits inside one committed region";
+        else if ( refusal.m_bWriteSlotContended )
+            pBecause = "because another thread held this process's single write slot at the time";
+        else if ( refusal.m_bNotWritable )
+            pBecause = "because its page could not be made writable";
+        char szNote[320];
+        _snprintf_s( szNote, sizeof( szNote ), _TRUNCATE,
+                     "could not be written back over the branch that displaced this plugin, %s, so this plugin's branch is "
+                     "not back at this entry",
+                     pBecause );
+        ReportPatchFailure( site.m_pName, reinterpret_cast<void *>( site.m_ullSite ), szNote );
+        return;
+    }
+    const char *pState = "was written back over the branch that displaced this plugin, but that write did not finish cleanly "
+                         "and this plugin was not told which part of it failed";
+    if ( refusal.m_bNotRestored && refusal.m_bNotFlushed )
+        pState = "was written back over the branch that displaced this plugin, but the processor was not told those bytes "
+                 "changed and the page did not get its own protection back, so it may keep using the copy it already had and "
+                 "it keeps the write access this plugin added";
+    else if ( refusal.m_bNotRestored )
+        pState = "was written back over the branch that displaced this plugin, but the page did not get its own protection "
+                 "back and keeps the write access this plugin added";
+    else if ( refusal.m_bNotFlushed )
+        pState = "was written back over the branch that displaced this plugin with its own protection, but the processor "
+                 "was not told those bytes changed, so it may keep using the copy it already had";
+    ReportPatchWrittenNotClean( site.m_pName, reinterpret_cast<void *>( site.m_ullSite ), pState );
+}
+
+// Takes a site back from a module that overwrote our branch, recording where its branch went so the handler hands frames
+// to it instead of losing them. Nothing is written unless that target is executable and the site still holds a jump opcode.
+inline bool AttemptReclaimCodeSite( SHeldCodeSite &site, UINT_PTR ullOtherTarget )
+{
+    // Without a handler that hands frames on, taking the site back would drop the other module's hook outright.
+    if ( !site.m_bChainsFrame.load( std::memory_order_acquire ) )
+        return false;
+    if ( site.m_bContested )
+        return false;
+    // A call row comes back as a jump that doesnt push a return address, so it is excluded. None is armed, so untested.
+    if ( site.m_ucOpcode != REL32_JUMP_OPCODE )
+        return false;
+    const UINT_PTR ullAlreadyChained = site.m_ullChainTarget.load( std::memory_order_acquire );
+    if ( ullAlreadyChained != 0 && ullAlreadyChained == ullOtherTarget )
+        return false;  // already goes where that module sends the entry; the caller reports the site as not held
+    if ( site.m_ulRetakeAttempts >= MAX_CODE_SITE_RETAKES )
+    {
+        site.m_bContested = true;
+        const unsigned long ulHandedOver = site.m_ulCompletedHandOvers.load( std::memory_order_acquire );
+        char szOwner[SITE_OWNER_NAME_LENGTH];
+        DescribeAddressOwner( ullOtherTarget, szOwner, sizeof( szOwner ) );
+        char szNote[448];
+        _snprintf_s( szNote, sizeof( szNote ), _TRUNCATE,
+                     "has been attempted %lu times, and an attempt is spent whether or not its write landed, so this "
+                     "plugin stops competing for this site; the branch standing there now is one to 0x%08X in %s and the "
+                     "code it replaced runs here instead of its hook from now on; %lu frames had been handed over at "
+                     "this site by then",
+                     site.m_ulRetakeAttempts, static_cast<unsigned int>( ullOtherTarget ), szOwner, ulHandedOver );
+        ReportPatchFailure( site.m_pName, reinterpret_cast<void *>( site.m_ullSite ), szNote );
+        site.m_ulStateReported.fetch_or( CODE_SITE_REPORTED_OTHER_BRANCH, std::memory_order_acq_rel );  // after the report, so one that failed stays reportable
+        return false;
+    }
+    if ( !IsExecutableRange( reinterpret_cast<const void *>( ullOtherTarget ), REL32_OPCODE_LENGTH ) )
+        return false;
+    ++site.m_ulRetakeAttempts;
+    UINT_PTR ullChain = 0;
+    SWriteRefusal reclaimRefusal;
+    const EWriteResult result =
+        InstallJump( site.m_ullSite, site.m_pFunc, &ullChain, nullptr, false, &reclaimRefusal,
+                     REL32_JUMP_OPCODE );
+    ReportReclaimWriteOutcome( site, result, reclaimRefusal );
+    // A refused write leaves the site as the other module left it, so the caller's report stays true.
+    if ( result == EWriteResult::Failed )
+        return false;
+    // Read once for both notes: another hand over could increment it while a format string reads it.
+    const unsigned long ulHandedOver = site.m_ulCompletedHandOvers.load( std::memory_order_acquire );
+    if ( ullChain == 0 )
+    {
+        // The site holds our branch with no target recorded. The recorded target stands: it is still where this entry goes.
+        char szNote[384];
+        _snprintf_s( szNote, sizeof( szNote ), _TRUNCATE,
+                     "0x%08X now holds this plugin's branch, but the site no longer carried the branch that had displaced "
+                     "this plugin by the time it was checked, so this attempt recorded no target; the target this site "
+                     "records is left as it stands rather than cleared, and %lu frames had been handed over here by then",
+                     static_cast<unsigned int>( site.m_ullSite ), ulHandedOver );
+        ReportPatchNote( site.m_pName, szNote );
+        site.m_ulStateReported.store( 0, std::memory_order_release );
+        return true;
+    }
+    site.m_ullChainTarget.store( ullChain, std::memory_order_release );
+    // Resolved from what the write recorded, not from the target handed in: the two differ if the site changed again.
+    char szOwner[SITE_OWNER_NAME_LENGTH];
+    DescribeAddressOwner( ullChain, szOwner, sizeof( szOwner ) );
+    char szNote[384];
+    _snprintf_s( szNote, sizeof( szNote ), _TRUNCATE,
+                 "0x%08X had a branch from %s written over it by that module, so the site was taken back and the frame is "
+                 "now handed to that branch after this plugin's own work, so both hooks keep running at this entry; the "
+                 "handler had handed over %lu frames here by then",
+                 static_cast<unsigned int>( site.m_ullSite ), szOwner, ulHandedOver );
+    ReportPatchNote( site.m_pName, szNote );
+    site.m_ulStateReported.store( 0, std::memory_order_release );  // the site is held again, so a later displacement is a new state
+    return true;
+}
+
+// A site that stopped holding this plugin's branch is taken back within the budget; after that it is contested.
 inline void RevalidateHeldCodeSites()
 {
     const unsigned long ulCount = HeldCodeSiteCount().load( std::memory_order_acquire );
@@ -1478,22 +1653,24 @@ inline void RevalidateHeldCodeSites()
         const ECodeSiteState eState = ClassifyHeldCodeSite( site, ullTarget );
         if ( eState == ECodeSiteState::HoldsOurBranch )
             continue;
+        if ( eState == ECodeSiteState::HoldsOtherBranch && AttemptReclaimCodeSite( site, ullTarget ) )
+            continue;
         unsigned long ulOutcome = 0;
         switch ( eState )
         {
         case ECodeSiteState::Unreadable:
-            ulOutcome = 1UL << 0;
+            ulOutcome = CODE_SITE_REPORTED_UNREADABLE;
             break;
         case ECodeSiteState::NotOurOpcode:
-            ulOutcome = 1UL << 1;
+            ulOutcome = CODE_SITE_REPORTED_NOT_OURS;
             break;
         case ECodeSiteState::HoldsOtherBranch:
-            ulOutcome = 1UL << 2;
+            ulOutcome = CODE_SITE_REPORTED_OTHER_BRANCH;
             break;
         case ECodeSiteState::HoldsOurBranch:
             continue;
         }
-        if ( ( site.m_ulStateReported & ulOutcome ) != 0 )
+        if ( ( site.m_ulStateReported.load( std::memory_order_acquire ) & ulOutcome ) != 0 )
             continue;
         char szNote[320];
         if ( eState == ECodeSiteState::HoldsOtherBranch )
@@ -1515,13 +1692,11 @@ inline void RevalidateHeldCodeSites()
                          "was a branch this plugin wrote into this executable and stopped being readable memory during "
                          "a frame check, so whether its hook still runs at this site cannot be checked" );
         ReportPatchFailure( site.m_pName, reinterpret_cast<void *>( site.m_ullSite ), szNote );
-        site.m_ulStateReported |= ulOutcome;  // after the report, so one that failed stays reportable
+        site.m_ulStateReported.fetch_or( ulOutcome, std::memory_order_acq_rel );  // after the report, so one that failed stays reportable
     }
 }
 
-// Called at the top of a frame and again at its end, because verifying at install proves only the state at install and
-// another module patches in levels. The top call is the one that matters: the game reads these sites during the frame and
-// a pipeline caches the callback it finds, so a displaced one never reaches this renderer again and the value is written back.
+// Called at the top of a frame and again at its end: verifying at install proves only the state at install.
 inline void RevalidateExclusiveSlots()
 {
     const unsigned long ulCount = ExclusiveSlotCount().load( std::memory_order_acquire );
@@ -1744,10 +1919,7 @@ struct SRevalidateSlot
     }
 };
 
-// The whole check in the order it has to run: the held note, the one audit a run gets, the value sites we have to hold,
-// then the code hooks we can only report on. One function, because the frame path calls it from more than one place. A
-// thread that cant take the slot skips the frame rather than waiting, and so does a re-entrant call, which is what stops
-// a sink that patches from recursing into the check that reported to it.
+// The whole check in the order it has to run. A thread that cant take the slot skips the frame, as does a re-entrant call.
 inline void RevalidateOwnedSites()
 {
     SRevalidateSlot sequence;
@@ -1857,8 +2029,8 @@ inline void ReportExclusiveSlotAudit()
     {
         char szCodeHeader[192];
         _snprintf_s( szCodeHeader, sizeof( szCodeHeader ), _TRUNCATE,
-                     "checks the %lu code hooks this plugin wrote into this executable, which are branches it never "
-                     "rewrites and only ever reports",
+                     "checks the %lu code hooks this plugin wrote into this executable, which are branches it reads on "
+                     "every frame and writes back only within its re-take budget",
                      ulCodeCount );
         ReportPatchNote( "Code audit", szCodeHeader );
     }
